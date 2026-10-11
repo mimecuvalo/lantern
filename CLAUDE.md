@@ -1,0 +1,139 @@
+# CLAUDE.md
+
+Guidance for Claude Code (claude.ai/code) working in this repository.
+
+## What this is
+
+A native Winamp 2.x-compatible music player for macOS, written in **Rust**.
+
+**Status: M6 of 7 done** (see the milestone table in the design doc).
+**Read `docs/design/2026-09-21-rust-architecture.md` before writing any code.**
+It fixes the threading model, crate layout, dependency choices and milestones.
+Deviating from it is fine; doing so silently is not.
+
+Three decisions from it are load-bearing and should not be quietly revisited:
+pixel-exact Winamp geometry (275x116 etc.), full repaint with no dirty-rect
+tracking, and the FFT running on the UI thread rather than in the audio callback.
+
+## The one hard rule
+
+**Never read, fetch, or search for the Winamp source code** that Llama Group
+published under the Winamp Collaborative License in September 2024 and then
+pulled. This project's entire legal position rests on clean-room provenance.
+
+Approved sources: **Webamp** (https://github.com/captbaritone/webamp, MIT) and
+public format documentation. Read `docs/legal.md` before touching anything
+skin-related, and before adding a codec.
+
+Two standing consequences:
+- The built-in default skin must be **original artwork**, not a recreation of
+  Winamp's stock 2.9x bitmaps. It is Night (`assets/default-skin.wsz`),
+  drawn in code with the other Lantern themes in `assets/skins/`.
+- `skins/` is gitignored. Third-party skins are for local development only —
+  never commit them. That includes Winamp's own stock skins (`base-2.91`),
+  which are Llama Group artwork.
+
+## Repository layout
+
+```
+docs/
+  legal.md                      — provenance, trademark, codec patents. Read this.
+  non-goals.md                  — Spotify/Apple Music/iCloud are "no", not "not yet"
+  design/
+    2026-09-21-rust-architecture.md — the plan. Read first.
+  reference/
+    skin-format-design.md       — inherited Swift-era spec. The .wsz format analysis
+                                  is portable and valuable; the AppKit architecture
+                                  sections are obsolete. Header explains which is which.
+scripts/
+  create-dmg.sh                 — .app -> signed-ish DMG via hdiutil. Language-agnostic.
+  release-notes.sh              — feeds the CHANGELOG's top section to a GitHub Release.
+crates/
+  lantern-skin/                    — .wsz bytes -> Skin; pure, no I/O
+  lantern-audio/                   — decode, resample, EQ, output, analyser, tags
+  lantern-playlist/                — playlist model; M3U/PLS/cue parsing; pure
+src/
+  main.rs                       — arguments, skin, event loop
+  app/                          — one Pane per window; behaviour per window
+  ui/                           — layout and drawing: blitter, fonts, windows
+  platform/macos.rs             — region mask, menus, media keys, sRGB windows
+assets/
+  default-skin.wsz              — the built-in skin (Night): original art, generated
+                                  by `cargo run -p lantern-skin --example
+                                  make_default_skin`; regenerate, don't edit
+  skins/lantern-*.wsz           — the generator's other themes, committed too
+tests/fixtures/
+  skins/lantern-fixture.wsz        — original-artwork test skin, generated (see Build)
+  cue/                          — 7 cue sheets: UTF-8, Shift-JIS, CP-1251, CP-1252,
+                                  malformed, multi-file, zero-tracks
+  audio/sample.m4a              — 4 KB sample
+skins/                          — gitignored; third-party skins for local parser work
+```
+
+## Build
+
+```bash
+cargo build && cargo test --workspace
+cargo run -- <files, folders, .m3u, .pls or .cue ...>   # --skin <file.wsz>
+cargo run -p lantern-audio --example play -- "track.mp3" 5   # headless audio check
+```
+
+CI runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and a
+release build. Run all four before claiming something is done.
+
+Latest stable Rust, deliberately unpinned — no `rust-toolchain.toml`, no
+`rust-version`, so there is only ever one toolchain on disk. Rust here needs
+only the Command Line Tools. Full Xcode is **not** required.
+
+### Seeing what it renders, without a display
+
+The main window can be drawn to a plain buffer and dumped as a PNG (one per
+skin: the fixture, the built-in, and any local skins in `skins/`), which is
+the practical way to check sprite work:
+
+```bash
+LANTERN_RENDER_DUMP=/tmp cargo test --bin lantern render -- --nocapture   # all three windows
+```
+
+### Test fixtures
+
+`tests/fixtures/skins/lantern-fixture.wsz` is an original-artwork skin, generated
+by `cargo run -p lantern-skin --example make_fixture` and committed. It runs in
+CI and deliberately contains the parser's corner cases (see the example's
+header). Regenerate it rather than editing it; output is byte-deterministic.
+
+Tests against the real skins in `skins/` (gitignored) **skip in CI** with a
+loud SKIPPED line. They add real-world breadth locally; the fixture is what
+guards CI.
+
+## Conventions
+
+- Conventional commit messages: `feat:`, `fix:`, `chore:`, `docs:`, `style:`
+- `CHANGELOG.md` is Keep a Changelog; add an `[Unreleased]` entry per user-visible
+  change. At release, rename `[Unreleased]` -> `[x.y.z] - date` before tagging.
+- Anything ported from Webamp keeps its MIT attribution.
+
+## Workflow
+
+- **Branching** — work directly on `main`; no feature branches (decided
+  2026-10-11). Don't push until the user says so.
+- **Commit granularity** — 1 task = 1 commit. Don't batch.
+- **Brainstorming** — use `superpowers:brainstorming` only when the task is
+  genuinely ambiguous or needs design exploration. Given a clear task list, skip
+  it and get to work.
+- **Subagents** — only when they genuinely save time on large independent tasks.
+  For small edits, do the work directly. Don't create overhead exceeding the task.
+- **End-of-list report** — after every task list post a short report: what was
+  done, non-obvious decisions taken mid-flight, anything skipped and why. Wait for
+  approval before moving on. Don't request screenshots; the user offers them.
+- **Session wrap-up** — see `.claude/commands/wrap-session.md`.
+
+## Open decisions
+
+Carried forward deliberately, not oversights:
+
+1. **Shaped windows.** Investigated at M2: a platform-shell feature. The macOS
+   path (a root-layer mask in `platform/macos.rs`) is implemented but has not
+   been seen on screen yet. See the architecture doc §6.
+2. **Music.app import.** `ITLibrary` needs an objc2 bridge; the XML path is
+   portable. See `docs/non-goals.md`.

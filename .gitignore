@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# macOS
+.DS_Store
+*.swp
+*~
+.Trashes
+._*
+
+# Packaged artifacts (scripts/create-dmg.sh)
+release/
+*.app
+*.dmg
+*.dSYM
+
+# Local test music. Never commit audio.
+sample-music/
+
+# Winamp skins used for local parser development.
+# Third-party copyrighted artwork — load them, don't redistribute them.
+# See docs/legal.md.
+/skins/
+
+# Tools
+.superpowers/
+
+# Claude Code workflow artifacts
+docs/next-session.md

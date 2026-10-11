@@ -1,0 +1,57 @@
+[workspace]
+members = ["crates/lantern-skin", "crates/lantern-audio", "crates/lantern-playlist"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mimecuvalo/wamp"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[package]
+name = "lantern"
+description = "A Winamp 2.x-compatible music player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lantern-skin = { path = "crates/lantern-skin" }
+lantern-audio = { path = "crates/lantern-audio" }
+lantern-playlist = { path = "crates/lantern-playlist" }
+winit = "0.30.13"
+softbuffer = "0.4.8"
+anyhow = "1.0.104"
+fontdue = "0.9.4"
+rfd = "0.17.2"
+muda = "0.20.0"
+
+# Shaped windows (region.txt). The same objc2 0.6 generation softbuffer and
+# cpal already pull in, so these add no new crates to the build.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6.4"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFString"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGPath", "CGImage", "CGColorSpace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSDictionary", "NSValue", "NSObject", "NSGeometry", "NSArray"] }
+objc2-media-player = { version = "0.3", default-features = false, features = ["std", "MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "CALayer", "CAShapeLayer", "CATransaction"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: nothing here needs to write.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # No pinned toolchain: the project tracks latest stable.
+      - name: Update to latest stable
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          cargo --version
+
+      # First-party cache action only. Deliberate: every third-party action is
+      # arbitrary code with access to the build. See docs/legal.md's sibling
+      # concern in the security review.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build release
+        run: cargo build --workspace --release

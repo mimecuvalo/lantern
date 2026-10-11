@@ -1,0 +1,14 @@
+[package]
+name = "lantern-playlist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chardetng = "1.0.0"
+encoding_rs = "0.8.42"
+thiserror = "2"

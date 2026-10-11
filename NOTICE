@@ -1,0 +1,19 @@
+Lantern
+Copyright (c) the Lantern contributors. Licensed under the MIT License (see LICENSE).
+
+This software includes material derived from the following projects.
+
+Webamp — https://github.com/captbaritone/webamp
+Copyright (c) 2015 Jordan Eldredge. MIT License.
+  Used for: sprite coordinates, the text.bmp character map, skin-file parsing
+  behaviour (viscolor.txt, pledit.txt, region.txt), window layouts and control
+  geometry, the marquee, slider and equaliser-graph behaviour, the
+  analyser's default look and level model (VisPainter.ts, FFTNullsoft.ts), and the values of the stock equaliser presets
+  (packages/webamp/presets/builtin.json).
+
+winamp-eqf (part of the Webamp repository)
+Copyright (c) Jordan Eldredge. ISC License.
+  Used for: the .eqf equaliser preset file layout.
+
+No code or data from the Winamp source code released by Llama Group is used,
+consulted or derived from. See docs/legal.md.

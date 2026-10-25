@@ -156,3 +156,29 @@ fn text_files_parse_from_real_skins() {
         assert_eq!(skin.viscolors[2], [0, 207, 144]);
     }
 }
+
+#[test]
+fn base_291_brings_its_own_generic_window() {
+    let Some(bytes) = skin_bytes("base-2.91.wsz") else {
+        return;
+    };
+    let skin = lantern_skin::parse(&bytes).unwrap();
+    for id in [lantern_skin::SheetId::Gen, lantern_skin::SheetId::GenEx] {
+        assert!(!skin.supplied(id), "{} is in the skin", id.base_name());
+    }
+    // All 26 letters found, each a plausible width.
+    for c in 'A'..='Z' {
+        let r = skin.gen_font().letter(c, true).unwrap();
+        assert!((3..=9).contains(&r.w), "{c}: {r:?}");
+    }
+}
+
+#[test]
+fn a_skin_without_gen_gets_lantern_s() {
+    let Some(bytes) = skin_bytes("OS8 AMP - Aquamarine.wsz") else {
+        return;
+    };
+    let skin = lantern_skin::parse(&bytes).unwrap();
+    assert!(skin.supplied(lantern_skin::SheetId::Gen));
+    assert!(skin.supplied(lantern_skin::SheetId::GenEx));
+}

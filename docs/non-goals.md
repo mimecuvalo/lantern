@@ -33,8 +33,8 @@ Local audio files. Specifically:
   (downloaded from the service for offline playback, or ripped from CD into your library)
 - **Playlist formats:** M3U, M3U8, CUE sheets
 - **Import:** one-way import from the Music.app local library; no write-back, no sync.
-  **Open question in the Rust rewrite:** the Swift version used the `iTunesLibrary`
-  framework (`ITLibrary`), which would need an objc2 bridge. The portable fallback is
-  parsing `iTunes Music Library.xml` directly, which the Swift version also supported.
+  Read through the `iTunesLibrary` framework (`ITLibrary`, `src/platform/apple_music.rs`),
+  which only answers Lantern running as an app, or from the library XML file Music
+  writes when sharing it is turned on.
 
 In short: if the bytes live on your disk, Lantern will play them with full DSP. If they live on someone else's server, they're out of scope.

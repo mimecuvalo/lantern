@@ -1,4 +1,4 @@
-//! The application: three skinned windows, one audio engine.
+//! The application: four skinned windows, one audio engine.
 //!
 //! Each window is a [`Pane`] — a winit window, its softbuffer surface and its
 //! widget table. Behaviour lives beside it: `player.rs` for the main window,
@@ -13,6 +13,8 @@
 
 mod dialogs;
 mod equalizer;
+mod library;
+mod library_ui;
 mod media;
 mod menus;
 mod player;
@@ -35,15 +37,15 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, Position};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::ui::blit::Surface;
 use crate::ui::font::TextFont;
 use crate::ui::geometry::{EQ_HEIGHT, MAIN_HEIGHT, SHADE_HEIGHT, WINDOW_WIDTH};
 use crate::ui::marquee::Marquee;
-use crate::ui::playlist_window;
 use crate::ui::{Input, Widget, WidgetId, WidgetKind, eq_window, hit_test, layout, main_window};
+use crate::ui::{library_window, playlist_window};
 
 /// Redraw interval while audio plays: the analyser wants 60fps.
 const PLAYING_FRAME: Duration = Duration::from_micros(16_667);
@@ -59,6 +61,14 @@ pub enum PaneKind {
     Main,
     Equalizer,
     Playlist,
+    Library,
+}
+
+impl PaneKind {
+    /// Double size magnifies these; the resizable windows stay put.
+    fn doubles(self) -> bool {
+        matches!(self, PaneKind::Main | PaneKind::Equalizer)
+    }
 }
 
 struct Pane {
@@ -118,6 +128,14 @@ pub struct App {
 
     /// Logical size of the playlist window, which the user can resize.
     playlist_size: (u32, u32),
+    /// Logical size of the library window, likewise.
+    library_size: (u32, u32),
+    /// While resizing the library: the grip's offset from its corner.
+    lib_resize: Option<(i32, i32)>,
+    /// The media library: its database, its tracks, its worker.
+    library: library::LibraryState,
+    /// What the library window has selected, typed and scrolled to.
+    lib_ui: library_ui::LibraryUi,
 
     /// When the next animation frame is due.
     next_frame_at: Option<Instant>,
@@ -219,6 +237,13 @@ impl App {
                 restored.playlist_size.0 as i32,
                 restored.playlist_size.1 as i32,
             ),
+            library_size: library::min_library_size(playlist_window::snap_size(
+                restored.library_size.0 as i32,
+                restored.library_size.1 as i32,
+            )),
+            lib_resize: None,
+            library: library::LibraryState::open(settings::config_dir()),
+            lib_ui: library_ui::LibraryUi::default(),
             next_frame_at: None,
             context: None,
             panes: Vec::new(),
@@ -239,6 +264,9 @@ impl App {
             last_saved: None,
             last_save_check: Instant::now(),
         };
+        app.lib_ui.tree_width =
+            library_window::clamp_tree_width(app.library_size.0, app.restored.library_tree_width);
+        app.lib_ui.columns = library_ui::columns_from_settings(&app.restored.library_columns);
         if app.font.is_none() {
             eprintln!("no usable font for the playlist; titles will not show");
         }
@@ -263,6 +291,7 @@ impl App {
                 PaneKind::Main => self.restored.main,
                 PaneKind::Equalizer => self.restored.equalizer,
                 PaneKind::Playlist => self.restored.playlist,
+                PaneKind::Library => self.restored.library,
             };
             self.pane(kind).map_or(fallback, |p| settings::WindowPlace {
                 position: p.window.outer_position().ok().map(|pos| {
@@ -289,6 +318,10 @@ impl App {
             equalizer: place(PaneKind::Equalizer),
             playlist: place(PaneKind::Playlist),
             playlist_size: self.playlist_size,
+            library: place(PaneKind::Library),
+            library_size: self.library_size,
+            library_tree_width: self.lib_ui.tree_width,
+            library_columns: library_ui::columns_to_settings(&self.lib_ui.columns),
             current: self.playlist.current(),
         }
     }
@@ -335,12 +368,17 @@ impl App {
             PaneKind::Main => (WINDOW_WIDTH, MAIN_HEIGHT),
             PaneKind::Equalizer => (WINDOW_WIDTH, EQ_HEIGHT),
             PaneKind::Playlist => self.playlist_size,
+            PaneKind::Library => self.library_size,
         };
         (w, if shaded { SHADE_HEIGHT } else { h })
     }
 
     /// Roll a window up to its 14px strip, or back down.
     pub(crate) fn toggle_shade(&mut self, kind: PaneKind) {
+        // The library has no windowshade mode, as in Winamp.
+        if kind == PaneKind::Library {
+            return;
+        }
         let (width, height) = self.playlist_size;
         // Toggle states live on the widgets about to be replaced: read them
         // first.
@@ -356,6 +394,7 @@ impl App {
             (PaneKind::Equalizer, true) => eq_window::shade_widgets(),
             (PaneKind::Playlist, false) => playlist_window::widgets(width, height),
             (PaneKind::Playlist, true) => playlist_window::shade_widgets(width),
+            (PaneKind::Library, _) => return,
         };
         pane.input.active = None;
         if kind == PaneKind::Main {
@@ -381,7 +420,7 @@ impl App {
     /// bottom and right edges.
     fn apply_size(&self, kind: PaneKind) {
         let (w, h) = self.logical_size(kind);
-        let factor = if self.doubled && kind != PaneKind::Playlist {
+        let factor = if self.doubled && kind.doubles() {
             2.0
         } else {
             1.0
@@ -558,12 +597,14 @@ impl App {
     fn render(&mut self, kind: PaneKind) {
         let now = Instant::now();
         let scale = self.scale(kind);
+        let lib_view = (kind == PaneKind::Library).then(|| self.library_view());
         let skin = self.skin.as_ref();
         let shaded = self.pane(kind).is_some_and(|p| p.shaded);
         let (main_view, eq_view, pl_view) = match kind {
             PaneKind::Main => (Some(self.main_view(now)), None, None),
             PaneKind::Equalizer => (None, Some(self.eq_view()), None),
             PaneKind::Playlist => (None, None, Some(self.playlist_view())),
+            PaneKind::Library => (None, None, None),
         };
         let eq_shade = eq_window::EqShadeView {
             focused: eq_view.as_ref().is_some_and(|v| v.focused),
@@ -602,7 +643,12 @@ impl App {
                 let font = self.font.as_ref();
                 playlist_window::draw(&mut dst, skin, font, &v, widgets, scale);
             }
-            _ => {}
+            _ => {
+                if let Some(v) = &lib_view {
+                    let font = self.font.as_ref();
+                    library_window::draw(&mut dst, skin, font, v, widgets, scale);
+                }
+            }
         }
         let _ = buffer.present();
         #[cfg(target_os = "macos")]
@@ -629,7 +675,7 @@ impl App {
         position: Option<Position>,
     ) -> Option<()> {
         let (w, h) = self.logical_size(kind);
-        let factor = if self.doubled && kind != PaneKind::Playlist {
+        let factor = if self.doubled && kind.doubles() {
             2.0
         } else {
             1.0
@@ -645,6 +691,7 @@ impl App {
             PaneKind::Main => "Lantern",
             PaneKind::Equalizer => "Lantern Equalizer",
             PaneKind::Playlist => "Lantern Playlist",
+            PaneKind::Library => library_window::TITLE,
         };
         let mut attrs = Window::default_attributes()
             .with_title(title)
@@ -688,6 +735,7 @@ impl App {
             PaneKind::Main => layout::main_window(),
             PaneKind::Equalizer => eq_window::widgets(),
             PaneKind::Playlist => playlist_window::widgets(w, h),
+            PaneKind::Library => library_window::widgets(w, h, self.lib_ui.tree_width),
         };
         // Colour-managed without a per-frame conversion; see the notes.
         #[cfg(target_os = "macos")]
@@ -706,9 +754,13 @@ impl App {
     }
 
     /// Where a window goes with no saved place: stacked under the main
-    /// window — the playlist under the EQ, too — as Winamp starts.
+    /// window — the playlist under the EQ, too — as Winamp starts. The
+    /// library goes beside the main window, on its right.
     fn default_place(&self, kind: PaneKind) -> Option<LogicalPosition<f64>> {
         let main = self.rect(PaneKind::Main)?;
+        if kind == PaneKind::Library {
+            return Some(LogicalPosition::new(main.x + main.w, main.y));
+        }
         let mut y = main.y + main.h;
         if kind == PaneKind::Playlist
             && let Some(eq) = self.rect(PaneKind::Equalizer)
@@ -794,14 +846,19 @@ impl App {
         };
         let is_title = matches!(
             id,
-            layout::TITLE_DRAG | eq_window::TITLE_DRAG | playlist_window::TITLE_DRAG
+            layout::TITLE_DRAG
+                | eq_window::TITLE_DRAG
+                | playlist_window::TITLE_DRAG
+                | library_window::TITLE_DRAG
         );
         if is_title {
-            // A double-click on any title bar rolls the window up or down.
+            // A double-click on a title bar rolls the window up or down —
+            // any but the library's, which has no windowshade mode.
             let now = Instant::now();
-            let double = self
-                .title_click
-                .is_some_and(|(k, t)| k == kind && now.duration_since(t) < DOUBLE_CLICK);
+            let double = kind != PaneKind::Library
+                && self
+                    .title_click
+                    .is_some_and(|(k, t)| k == kind && now.duration_since(t) < DOUBLE_CLICK);
             if double {
                 self.title_click = None;
                 self.toggle_shade(kind);
@@ -824,8 +881,10 @@ impl App {
         if slider {
             self.drag_slider(kind, id, x, y);
         }
-        if kind == PaneKind::Playlist {
-            self.press_playlist(id, y);
+        match kind {
+            PaneKind::Playlist => self.press_playlist(id, y),
+            PaneKind::Library => self.press_library(id, x, y),
+            _ => {}
         }
         self.request_redraw(kind);
     }
@@ -869,6 +928,7 @@ impl App {
             PaneKind::Main => self.drag_main_slider(id, x),
             PaneKind::Equalizer => self.drag_eq_slider(id, x, y),
             PaneKind::Playlist => self.drag_playlist(id, x, y),
+            PaneKind::Library => self.drag_library(id, x, y),
         }
     }
 
@@ -876,6 +936,7 @@ impl App {
         match kind {
             PaneKind::Main => self.release_main_slider(id),
             PaneKind::Playlist => self.release_playlist_slider(id),
+            PaneKind::Library => self.release_library_slider(id),
             PaneKind::Equalizer => {}
         }
     }
@@ -885,6 +946,7 @@ impl App {
             PaneKind::Main => self.activate_main(id),
             PaneKind::Equalizer => self.activate_eq(id),
             PaneKind::Playlist => self.activate_playlist(id),
+            PaneKind::Library => self.activate_library(id),
         }
     }
 
@@ -942,6 +1004,7 @@ struct Drag {
 
 impl ApplicationHandler for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.library.stop();
         self.save_settings();
     }
 
@@ -965,6 +1028,7 @@ impl ApplicationHandler for App {
         for (kind, place) in [
             (PaneKind::Equalizer, restored.equalizer),
             (PaneKind::Playlist, restored.playlist),
+            (PaneKind::Library, restored.library),
         ] {
             let at =
                 logical(place.position).or_else(|| self.default_place(kind).map(Position::from));
@@ -979,6 +1043,14 @@ impl ApplicationHandler for App {
         }
         self.restoring = false;
         self.restore_toggles(&restored);
+        if let Some(proxy) = self.proxy.clone() {
+            self.library.start(move || {
+                let _ = proxy.send_event(());
+            });
+        }
+        // Catch up with whatever changed in the watched folders while
+        // Lantern was closed.
+        self.library.rescan();
         self.install_menu_bar();
         if let Some(main) = self.pane(PaneKind::Main) {
             main.window.focus_window();
@@ -1015,6 +1087,7 @@ impl ApplicationHandler for App {
         }
         let now = Instant::now();
         self.tick(now);
+        self.poll_library();
         self.service_media();
         self.autosave(now);
         let Some(interval) = self.next_frame() else {
@@ -1070,7 +1143,20 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
 
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
+                // Winamp's Alt+L: by its physical key, as Option turns L
+                // into another character, and AppKit will not reliably
+                // match an Option-only menu shortcut.
+                let alt_l = self.modifiers.alt_key()
+                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyL);
+                if event.state == ElementState::Pressed && alt_l {
+                    if !event.repeat {
+                        self.toggle_library();
+                    }
+                } else if event.state == ElementState::Pressed
+                    && kind == PaneKind::Library
+                    && self.library_key(&event)
+                {
+                } else if event.state == ElementState::Pressed {
                     let handled =
                         kind == PaneKind::Playlist && self.playlist_key(&event.logical_key);
                     if !handled {
@@ -1079,11 +1165,11 @@ impl ApplicationHandler for App {
                 }
             }
 
-            WindowEvent::MouseWheel { delta, .. } => {
-                if kind == PaneKind::Playlist {
-                    self.wheel_playlist(delta);
-                }
-            }
+            WindowEvent::MouseWheel { delta, .. } => match kind {
+                PaneKind::Playlist => self.wheel_playlist(delta),
+                PaneKind::Library => self.wheel_library(delta),
+                _ => {}
+            },
 
             // Dropping files on any window adds them, as in Winamp.
             WindowEvent::DroppedFile(path) => self.add_paths([path]),
@@ -1127,8 +1213,8 @@ impl ApplicationHandler for App {
                 ElementState::Released => self.release(kind),
             },
 
-            // Right-click: the playlist's own menu over the playlist, the
-            // main menu anywhere else — as in Winamp.
+            // Right-click: the playlist's and the library's own menus over
+            // them, the main menu anywhere else — as in Winamp.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Right,
@@ -1136,6 +1222,7 @@ impl ApplicationHandler for App {
             } => {
                 let menu = match kind {
                     PaneKind::Playlist => menus::MenuKind::Playlist,
+                    PaneKind::Library => self.library_menu_here(),
                     _ => menus::MenuKind::Main,
                 };
                 self.show_menu(menu, kind);

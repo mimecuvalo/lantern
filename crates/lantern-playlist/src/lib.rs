@@ -135,6 +135,21 @@ impl Playlist {
         }
     }
 
+    /// Put `entries` in before position `at` (or at the end, if past it),
+    /// keeping `current` on the entry it was on.
+    pub fn insert(&mut self, at: usize, entries: impl IntoIterator<Item = Entry>) {
+        let at = at.min(self.entries.len());
+        let before = self.entries.len();
+        self.entries.splice(at..at, entries);
+        let added = self.entries.len() - before;
+        match self.current {
+            Some(c) if c >= at => self.current = Some(c + added),
+            None if !self.entries.is_empty() => self.current = Some(0),
+            _ => {}
+        }
+        self.anchor = None;
+    }
+
     pub fn clear(&mut self) {
         self.entries.clear();
         self.current = None;
@@ -322,6 +337,24 @@ mod tests {
 
     fn selected(p: &Playlist) -> Vec<usize> {
         (0..p.len()).filter(|&i| p.entries[i].selected).collect()
+    }
+
+    #[test]
+    fn insert_keeps_the_current_entry() {
+        let e = |p: &str| Entry::new(PathBuf::from(p));
+        let mut pl = Playlist::default();
+        pl.add([e("a"), e("b"), e("c")]);
+        pl.set_current(Some(1));
+        pl.insert(1, [e("x"), e("y")]);
+        let paths: Vec<_> = pl
+            .entries()
+            .iter()
+            .map(|e| e.path.to_str().unwrap())
+            .collect();
+        assert_eq!(paths, ["a", "x", "y", "b", "c"]);
+        assert_eq!(pl.current(), Some(3), "still on b");
+        pl.insert(99, [e("z")]);
+        assert_eq!(pl.entries().last().unwrap().path, PathBuf::from("z"));
     }
 
     #[test]

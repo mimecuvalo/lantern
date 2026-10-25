@@ -12,7 +12,9 @@
 //! - `cbuttons.bmp` is really a PNG;
 //! - `nums_ex.bmp` instead of `numbers.bmp`;
 //! - text files with comments, CRLF, a missing `#` and a real `region.txt`;
-//! - a junk file the parser must ignore.
+//! - a junk file the parser must ignore;
+//! - `gen.bmp`'s title letters in widths of 3 to 6, so the scan for their
+//!   edges is tested, and `genex.bmp`'s colour swatches, each distinct.
 //!
 //! Each sheet's top-left pixel encodes its [`SheetId`] (`red = index * 16`),
 //! so tests can check that every file landed in the right slot.
@@ -108,8 +110,48 @@ fn draw_sheet(id: SheetId) -> RgbImage {
         }
     }
 
+    match id {
+        SheetId::Gen => {
+            for y in [88, 96] {
+                gen_letters(&mut img, y);
+            }
+        }
+        SheetId::GenEx => {
+            for slot in 0..22u8 {
+                img.put_pixel(48 + 2 * u32::from(slot), 0, Rgb(genex_swatch(slot)));
+            }
+        }
+        _ => {}
+    }
+
     img.put_pixel(0, 0, Rgb([(id as u8) * 16, 0, 0]));
     img
+}
+
+/// Letter `i` of the alphabet is `3 + i % 4` wide.
+fn gen_letters(img: &mut RgbImage, y: u32) {
+    const KEY: [u8; 3] = [0, 200, 255];
+    let mut x = 0;
+    for i in 0..=26 {
+        for yy in y..y + 7 {
+            img.put_pixel(x, yy, Rgb(KEY));
+        }
+        if i == 26 {
+            break;
+        }
+        let w = 3 + i % 4;
+        for yy in y..y + 7 {
+            for xx in x + 1..x + 1 + w {
+                img.put_pixel(xx, yy, Rgb(LIGHT));
+            }
+        }
+        x += w + 1;
+    }
+}
+
+/// `genex.bmp` colour slot `slot`.
+fn genex_swatch(slot: u8) -> [u8; 3] {
+    [slot * 10, 100, 200]
 }
 
 /// Standard sizes, except the Numbers slot, which ships as `nums_ex.bmp`.

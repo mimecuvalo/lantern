@@ -2260,6 +2260,508 @@ fn text_bmp() -> Canvas {
     c
 }
 
+// -- Generic windows ----------------------------------------------------------
+
+/// Separates the title letters in `gen.bmp`: readers find each letter's end
+/// by the next pixel of this colour, so no letter may contain it.
+const LETTER_KEY: C = [255, 0, 255];
+
+/// A glyph's inked width in the 4x5 font.
+fn glyph_width(ch: char) -> i32 {
+    glyph(ch)
+        .iter()
+        .filter_map(|row| row.rfind('#'))
+        .max()
+        .map_or(0, |i| i as i32 + 1)
+}
+
+/// The title alphabet: a row of 7px cells, A to Z, each the glyph plus a
+/// 1px gap either side, on `plate` so the title's backing shows unbroken,
+/// with `LETTER_KEY` between cells and at the row's start.
+fn gen_letters(c: &mut Canvas, y: i32, ink: C, plate: C) {
+    c.fill(0, y, 1, 7, LETTER_KEY);
+    let mut x = 1;
+    for ch in 'A'..='Z' {
+        let w = glyph_width(ch) + 2;
+        c.fill(x, y, w, 7, plate);
+        c.art(x + 1, y + 1, &glyph(ch), ink);
+        c.fill(x + w, y, 1, 7, LETTER_KEY);
+        x += w + 1;
+    }
+}
+
+/// `gen.bmp` in the theme's manner, built like the playlist's frame: a lit
+/// groove along the title bar level with the title's middle, the title on a
+/// dark plate, and a fine line edging the contents.
+fn gen_bmp() -> Canvas {
+    let p = pal();
+    let mut c = Canvas::new(194, 109);
+    c.backdrop(0, 0, 194, 109, 81);
+    for active in [true, false] {
+        let line = if active { p.cyan1 } else { p.s3 };
+        let groove = |c: &mut Canvas, x0: i32, x1: i32, y: i32| {
+            for xx in x0..x1 {
+                c.px(xx, y + 7, line);
+            }
+        };
+        let top = |c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, seed: u32| {
+            c.backdrop(x, y, w, h, seed);
+            c.fill(x, y, w, 1, p.s3);
+            // The frame's inner edge, where the contents begin.
+            c.fill(x, y + h - 1, w, 1, p.s3);
+        };
+        c.put(SpriteKey::GenTopLeft { active }, |c, x, y, w, h| {
+            top(c, x, y, w, h, 82);
+            c.fill(x, y, 1, h, p.s3);
+            lantern(&mut *c, x + 3, y + 3, active);
+            groove(c, x + 13, x + w, y);
+        });
+        c.put(
+            SpriteKey::GenTopLeftRightFill { active },
+            |c, x, y, w, h| {
+                top(c, x, y, w, h, 83);
+                groove(c, x, x + w, y);
+            },
+        );
+        c.put(SpriteKey::GenTopLeftEnd { active }, |c, x, y, w, h| {
+            top(c, x, y, w, h, 84);
+            groove(c, x, x + w - 3, y);
+        });
+        c.put(SpriteKey::GenTopCenterFill { active }, |c, x, y, w, h| {
+            top(c, x, y, w, h, 85);
+            c.fill(x, y + 3, w, 9, p.s0);
+        });
+        c.put(SpriteKey::GenTopRightEnd { active }, |c, x, y, w, h| {
+            top(c, x, y, w, h, 86);
+            groove(c, x + 3, x + w, y);
+        });
+        c.put(SpriteKey::GenTopRight { active }, |c, x, y, w, h| {
+            top(c, x, y, w, h, 87);
+            c.fill(x + w - 1, y, 1, h, p.s0);
+            groove(c, x, x + 11, y);
+            small_button(c, x + w - 11, y + 3, &ICON_CLOSE, false);
+        });
+        let (ink, row) = if active { (p.cyan, 88) } else { (p.s4, 96) };
+        gen_letters(&mut c, row, ink, p.s0);
+    }
+    let side = |c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, seed: u32, left: bool| {
+        c.backdrop(x, y, w, h, seed);
+        // The outer edge, then the fine line along the contents.
+        if left {
+            c.fill(x, y, 1, h, p.s3);
+            c.fill(x + w - 1, y, 1, h, p.s3);
+        } else {
+            c.fill(x, y, 1, h, p.s3);
+            c.fill(x + w - 1, y, 1, h, p.s0);
+        }
+    };
+    c.put(SpriteKey::GenMiddleLeft, |c, x, y, w, h| {
+        side(c, x, y, w, h, 88, true)
+    });
+    c.put(SpriteKey::GenMiddleLeftBottom, |c, x, y, w, h| {
+        side(c, x, y, w, h, 89, true);
+        c.fern(x + 4, y + h, 7, 90);
+    });
+    c.put(SpriteKey::GenMiddleRight, |c, x, y, w, h| {
+        side(c, x, y, w, h, 91, false)
+    });
+    c.put(SpriteKey::GenMiddleRightBottom, |c, x, y, w, h| {
+        side(c, x, y, w, h, 92, false)
+    });
+    let bottom = |c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, seed: u32| {
+        c.backdrop(x, y, w, h, seed);
+        c.fill(x, y, w, 1, p.s3);
+        c.fill(x, y + h - 1, w, 1, p.s0);
+        c.moss(x, y + h - 2, w, true, seed + 1);
+    };
+    c.put(SpriteKey::GenBottomFill, |c, x, y, w, h| {
+        bottom(c, x, y, w, h, 93)
+    });
+    c.put(SpriteKey::GenBottomLeft, |c, x, y, w, h| {
+        bottom(c, x, y, w, h, 95);
+        c.fill(x, y, 1, h, p.s3);
+    });
+    c.put(SpriteKey::GenBottomRight, |c, x, y, w, h| {
+        bottom(c, x, y, w, h, 97);
+        c.fill(x + w - 1, y, 1, h, p.s0);
+        // The resize grip.
+        for k in 0..3 {
+            for j in 0..=k {
+                c.px(x + w - 4 - 3 * j, y + h - 4 - 3 * (k - j), p.s4);
+            }
+        }
+    });
+    c.put(SpriteKey::GenClosePressed, |c, x, y, _, _| {
+        small_button(c, x, y, &ICON_CLOSE, true)
+    });
+    c
+}
+
+/// Scroll arrows, 7x4 pointing up; the others are this turned.
+const ARROW_UP: [&str; 4] = ["...#...", "..###..", ".#####.", "#######"];
+
+/// `ARROW_UP` turned to face `dir` (0 up, 1 down, 2 left, 3 right), as
+/// rows of a 7x7 cell.
+fn arrow(dir: u8) -> Vec<String> {
+    let at = |x: usize, y: usize| -> bool {
+        // Map the 7x7 cell back onto the 7x4 up arrow, centred.
+        let (ux, uy) = match dir {
+            0 => (x, y as i32 - 1),
+            1 => (x, 5 - y as i32),
+            2 => (y, x as i32 - 1),
+            _ => (y, 5 - x as i32),
+        };
+        (0..4).contains(&uy) && ARROW_UP[uy as usize].as_bytes()[ux] == b'#'
+    };
+    (0..7)
+        .map(|y| (0..7).map(|x| if at(x, y) { '#' } else { '.' }).collect())
+        .collect()
+}
+
+/// `genex.bmp`'s controls — buttons, scroll arrows, thumbs — each drawn by
+/// `face(canvas, x, y, w, h, pressed)` with `ink` for arrows and grips.
+fn genex_controls(
+    c: &mut Canvas,
+    face: impl Fn(&mut Canvas, i32, i32, i32, i32, bool),
+    ink: impl Fn(bool) -> C,
+) {
+    for pressed in [false, true] {
+        c.put(SpriteKey::GenExButton { pressed }, |c, x, y, w, h| {
+            face(c, x, y, w, h, pressed)
+        });
+        for (dir, key) in [
+            (0, SpriteKey::GenExScrollUp { pressed }),
+            (1, SpriteKey::GenExScrollDown { pressed }),
+            (2, SpriteKey::GenExScrollLeft { pressed }),
+            (3, SpriteKey::GenExScrollRight { pressed }),
+        ] {
+            c.put(key, |c, x, y, w, h| {
+                face(c, x, y, w, h, pressed);
+                let rows = arrow(dir);
+                let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+                let nudge = i32::from(pressed);
+                c.art(x + 3 + nudge, y + 3 + nudge, &rows, ink(pressed));
+            });
+        }
+        c.put(
+            SpriteKey::GenExVerticalThumb { pressed },
+            |c, x, y, w, h| {
+                face(c, x, y, w, h, pressed);
+                for k in 0..3 {
+                    c.fill(x + 4, y + h / 2 - 3 + 3 * k, w - 8, 1, ink(pressed));
+                }
+            },
+        );
+        c.put(
+            SpriteKey::GenExHorizontalThumb { pressed },
+            |c, x, y, w, h| {
+                face(c, x, y, w, h, pressed);
+                for k in 0..3 {
+                    c.fill(x + w / 2 - 3 + 3 * k, y + 4, 1, h - 8, ink(pressed));
+                }
+            },
+        );
+    }
+}
+
+/// `genex.bmp`'s colour swatches, one every 2px along the top from x=48,
+/// in the order `GenExColors` reads them.
+fn genex_swatches(c: &mut Canvas, colours: [C; 22]) {
+    for (i, colour) in colours.into_iter().enumerate() {
+        c.px(48 + 2 * i as i32, 0, colour);
+    }
+}
+
+fn genex_bmp() -> Canvas {
+    let p = pal();
+    let mut c = Canvas::new(130, 75);
+    c.fill(0, 0, 130, 75, p.s1);
+    genex_controls(
+        &mut c,
+        |c, x, y, w, h, pressed| c.raised(x, y, w, h, pressed),
+        |pressed| if pressed { p.cyan } else { p.cyan1 },
+    );
+    let text = mix(p.cyan, p.cyan1, 0.5);
+    let selected = mix(p.s2, p.s3, 0.5);
+    genex_swatches(
+        &mut c,
+        [
+            p.void,   // item background
+            text,     // item foreground
+            p.s1,     // window background
+            p.cyan,   // button text
+            p.rim_hi, // window text
+            p.s3,     // divider
+            selected, // playlist selection
+            p.s2,     // list header background
+            p.cyan1,  // list header text
+            p.s4,     // list header frame, top and left
+            p.s0,     // list header frame, bottom and right
+            p.s3,     // list header frame, pressed
+            p.s1,     // list header dead area
+            p.s3,     // scrollbar 1
+            p.s2,     // scrollbar 2
+            p.s4,     // pressed scrollbar 1
+            p.s3,     // pressed scrollbar 2
+            p.s0,     // scrollbar dead area
+            p.white,  // highlighted text
+            p.s3,     // highlighted background
+            p.amber,  // selected text
+            selected, // selected background
+        ],
+    );
+    c
+}
+
+// -- The fallback generic window -------------------------------------------------
+
+/// Lantern's `gen.bmp` and `genex.bmp` for skins that bring none, in the
+/// manner of the classic base skin: slate-violet bevels, twin gilt grips
+/// either side of the title, green on black inside. Drawn here from scratch.
+mod classic {
+    use super::{
+        C, Canvas, LETTER_KEY, SpriteKey, genex_controls, genex_swatches, glyph, glyph_width, mix,
+    };
+
+    const FACE: C = [46, 44, 70];
+    const FACE_LOW: C = [36, 35, 56];
+    const EDGE: C = [18, 18, 28];
+    const BEVEL_HI: C = [104, 102, 134];
+    const BEVEL_LO: C = [24, 24, 38];
+    const INNER: C = [128, 126, 158];
+    const GILT: C = [214, 192, 120];
+    const GILT_LOW: C = [126, 110, 64];
+    const DULL: C = [118, 114, 104];
+    const DULL_LOW: C = [74, 72, 70];
+    const INK: C = [226, 226, 234];
+    const INK_DIM: C = [150, 150, 168];
+
+    /// Face shading: lighter towards the top, as if lit from above.
+    fn face(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, top: i32, span: i32) {
+        for yy in y..y + h {
+            let t = ((yy - top) as f32 / span as f32).clamp(0.0, 1.0);
+            c.fill(x, yy, w, 1, mix(FACE, FACE_LOW, t));
+        }
+    }
+
+    /// Twin raised grips across `x0..x1`, capped at whichever ends are
+    /// their true ends rather than where one tile meets the next.
+    fn grips(c: &mut Canvas, (x0, x1): (i32, i32), y: i32, active: bool, caps: (bool, bool)) {
+        let (hi, lo) = if active {
+            (GILT, GILT_LOW)
+        } else {
+            (DULL, DULL_LOW)
+        };
+        for (row, colour) in [(5, lo), (6, hi), (7, lo), (9, lo), (10, hi), (11, lo)] {
+            c.fill(x0, y + row, x1 - x0, 1, colour);
+        }
+        for row in [5, 9] {
+            if caps.0 {
+                c.fill(x0, y + row, 1, 3, BEVEL_LO);
+            }
+            if caps.1 {
+                c.fill(x1 - 1, y + row, 1, 3, BEVEL_LO);
+            }
+        }
+    }
+
+    /// The top bar's shared construction: dark outer edge, a bright bevel
+    /// inside it, and the inner border the content hangs from.
+    fn top(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+        face(c, x, y, w, h, y, h);
+        c.fill(x, y, w, 1, EDGE);
+        c.fill(x, y + 1, w, 1, BEVEL_HI);
+        c.fill(x, y + h - 3, w, 1, BEVEL_LO);
+        c.fill(x, y + h - 2, w, 1, INNER);
+        c.fill(x, y + h - 1, w, 1, EDGE);
+    }
+
+    fn close(c: &mut Canvas, x: i32, y: i32, pressed: bool) {
+        let (face, tl, br) = if pressed {
+            (FACE_LOW, BEVEL_LO, BEVEL_HI)
+        } else {
+            (FACE, BEVEL_HI, BEVEL_LO)
+        };
+        c.fill(x, y, 9, 9, face);
+        c.frame(x, y, 9, 9, tl, br);
+        let ink = if pressed { GILT } else { INK_DIM };
+        for k in 0..5 {
+            c.px(x + 2 + k, y + 2 + k, ink);
+            c.px(x + 6 - k, y + 2 + k, ink);
+        }
+    }
+
+    fn letters(c: &mut Canvas, y: i32, ink: C) {
+        c.fill(0, y, 1, 7, LETTER_KEY);
+        let mut x = 1;
+        for ch in 'A'..='Z' {
+            let w = glyph_width(ch) + 2;
+            face(c, x, y, w, 7, y - 4, 20);
+            c.art(x + 1, y + 1, &glyph(ch), ink);
+            c.fill(x + w, y, 1, 7, LETTER_KEY);
+            x += w + 1;
+        }
+    }
+
+    pub fn gen_bmp() -> Canvas {
+        let mut c = Canvas::new(194, 109);
+        c.fill(0, 0, 194, 109, EDGE);
+        for active in [true, false] {
+            c.put(SpriteKey::GenTopLeft { active }, |c, x, y, w, h| {
+                top(c, x, y, w, h);
+                c.fill(x, y, 1, h, EDGE);
+                c.fill(x + 1, y + 1, 1, h - 2, BEVEL_HI);
+                c.fill(x + 9, y + h - 2, 1, 2, INNER);
+                grips(c, (x + 4, x + w), y, active, (true, false));
+            });
+            for (key, from, to, caps) in [
+                (
+                    SpriteKey::GenTopLeftRightFill { active },
+                    0,
+                    25,
+                    (false, false),
+                ),
+                (SpriteKey::GenTopLeftEnd { active }, 0, 22, (false, true)),
+                (SpriteKey::GenTopRightEnd { active }, 3, 25, (true, false)),
+            ] {
+                c.put(key, |c, x, y, w, h| {
+                    top(c, x, y, w, h);
+                    grips(c, (x + from, x + to.min(w)), y, active, caps);
+                });
+            }
+            c.put(SpriteKey::GenTopCenterFill { active }, |c, x, y, w, h| {
+                top(c, x, y, w, h)
+            });
+            c.put(SpriteKey::GenTopRight { active }, |c, x, y, w, h| {
+                top(c, x, y, w, h);
+                c.fill(x + w - 1, y, 1, h, EDGE);
+                c.fill(x + w - 2, y + 1, 1, h - 2, BEVEL_LO);
+                grips(c, (x, x + 12), y, active, (false, true));
+                close(c, x + w - 11, y + 3, false);
+            });
+            letters(
+                &mut c,
+                if active { 88 } else { 96 },
+                if active { INK } else { INK_DIM },
+            );
+        }
+        let side = |c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, left: bool| {
+            face(c, x, y, w, h, y - 40, 120);
+            if left {
+                c.fill(x, y, 1, h, EDGE);
+                c.fill(x + 1, y, 1, h, BEVEL_HI);
+                c.fill(x + w - 3, y, 1, h, BEVEL_LO);
+                c.fill(x + w - 2, y, 1, h, INNER);
+                c.fill(x + w - 1, y, 1, h, EDGE);
+            } else {
+                c.fill(x, y, 1, h, EDGE);
+                c.fill(x + 1, y, 1, h, INNER);
+                c.fill(x + 2, y, 1, h, BEVEL_LO);
+                c.fill(x + w - 2, y, 1, h, BEVEL_LO);
+                c.fill(x + w - 1, y, 1, h, EDGE);
+            }
+        };
+        c.put(SpriteKey::GenMiddleLeft, |c, x, y, w, h| {
+            side(c, x, y, w, h, true)
+        });
+        c.put(SpriteKey::GenMiddleLeftBottom, |c, x, y, w, h| {
+            side(c, x, y, w, h, true)
+        });
+        c.put(SpriteKey::GenMiddleRight, |c, x, y, w, h| {
+            side(c, x, y, w, h, false)
+        });
+        c.put(SpriteKey::GenMiddleRightBottom, |c, x, y, w, h| {
+            side(c, x, y, w, h, false)
+        });
+        let bottom = |c: &mut Canvas, x: i32, y: i32, w: i32, h: i32| {
+            face(c, x, y, w, h, y - 10, 30);
+            c.fill(x, y, w, 1, EDGE);
+            c.fill(x, y + 1, w, 1, INNER);
+            c.fill(x, y + 2, w, 1, BEVEL_LO);
+            c.fill(x, y + h - 2, w, 1, BEVEL_LO);
+            c.fill(x, y + h - 1, w, 1, EDGE);
+        };
+        c.put(SpriteKey::GenBottomFill, |c, x, y, w, h| {
+            bottom(c, x, y, w, h)
+        });
+        c.put(SpriteKey::GenBottomLeft, |c, x, y, w, h| {
+            bottom(c, x, y, w, h);
+            c.fill(x, y, 1, h, EDGE);
+            c.fill(x + 1, y + 1, 1, h - 2, BEVEL_HI);
+            c.fill(x + 9, y, 1, 2, INNER);
+        });
+        c.put(SpriteKey::GenBottomRight, |c, x, y, w, h| {
+            bottom(c, x, y, w, h);
+            c.fill(x + w - 1, y, 1, h, EDGE);
+            c.fill(x + w - 2, y + 1, 1, h - 2, BEVEL_LO);
+            c.fill(x + w - 8, y, 1, 2, INNER);
+            // The resize grip: three ridges along the diagonal.
+            for k in 0..3 {
+                let d = 4 + 3 * k;
+                for j in 0..d {
+                    c.px(x + w - 3 - d + j, y + h - 3 - j, BEVEL_HI);
+                    c.px(x + w - 2 - d + j, y + h - 3 - j, BEVEL_LO);
+                }
+            }
+        });
+        c.put(SpriteKey::GenClosePressed, |c, x, y, _, _| {
+            close(c, x, y, true)
+        });
+        c
+    }
+
+    /// A raised control in light slate, sunk when pressed.
+    fn control(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, pressed: bool) {
+        const FACE: C = [184, 192, 210];
+        const FACE_DOWN: C = [150, 158, 178];
+        const HI: C = [238, 242, 250];
+        const LO: C = [110, 118, 138];
+        if pressed {
+            c.fill(x, y, w, h, FACE_DOWN);
+            c.frame(x, y, w, h, EDGE, HI);
+            c.frame(x + 1, y + 1, w - 2, h - 2, LO, FACE_DOWN);
+        } else {
+            c.fill(x, y, w, h, FACE);
+            c.frame(x, y, w, h, HI, EDGE);
+            c.frame(x + 1, y + 1, w - 2, h - 2, FACE, LO);
+        }
+    }
+
+    pub fn genex_bmp() -> Canvas {
+        let mut c = Canvas::new(130, 75);
+        c.fill(0, 0, 130, 75, FACE);
+        genex_controls(&mut c, control, |_| [36, 40, 54]);
+        genex_swatches(
+            &mut c,
+            [
+                [0, 0, 0],       // item background
+                [0, 226, 0],     // item foreground
+                FACE,            // window background
+                [20, 20, 28],    // button text
+                INK,             // window text
+                [118, 118, 146], // divider
+                [0, 0, 190],     // playlist selection
+                [68, 66, 104],   // list header background
+                INK,             // list header text
+                [120, 118, 156], // list header frame, top and left
+                [28, 28, 44],    // list header frame, bottom and right
+                [86, 84, 120],   // list header frame, pressed
+                [56, 54, 86],    // list header dead area
+                [172, 176, 196], // scrollbar 1
+                [128, 132, 154], // scrollbar 2
+                [150, 154, 176], // pressed scrollbar 1
+                [104, 108, 130], // pressed scrollbar 2
+                [36, 35, 56],    // scrollbar dead area
+                [255, 255, 255], // highlighted text
+                [0, 0, 190],     // highlighted background
+                [255, 255, 255], // selected text
+                [0, 0, 150],     // selected background
+            ],
+        );
+        c
+    }
+}
+
 // -- Text files ---------------------------------------------------------------
 
 /// Background, grid dots, 16 bar rows top to bottom, oscilloscope, peaks.
@@ -2309,7 +2811,8 @@ fn scanlines(c: &mut Canvas) {
 }
 
 /// Writes every theme: the first, the default, to `assets/default-skin.wsz`,
-/// built into the app; the rest to `assets/skins/`.
+/// built into the app; the rest to `assets/skins/`. Then the generic window
+/// the parser falls back on, to `assets/fallback/`.
 fn main() -> anyhow::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (i, t) in THEMES.iter().enumerate() {
@@ -2320,6 +2823,14 @@ fn main() -> anyhow::Result<()> {
             root.join(format!("assets/skins/lantern-{}.wsz", t.name))
         };
         write_skin(&out)?;
+    }
+    for (name, canvas) in [
+        ("gen.bmp", classic::gen_bmp()),
+        ("genex.bmp", classic::genex_bmp()),
+    ] {
+        let out = root.join("assets/fallback").join(name);
+        canvas.0.save_with_format(&out, ImageFormat::Bmp)?;
+        println!("wrote {}", out.display());
     }
     Ok(())
 }
@@ -2348,6 +2859,8 @@ fn write_skin(out: &std::path::Path) -> anyhow::Result<()> {
             SheetId::EqEx => eq_ex_bmp(),
             SheetId::PlEdit => pledit_bmp(),
             SheetId::Text => text_bmp(),
+            SheetId::Gen => gen_bmp(),
+            SheetId::GenEx => genex_bmp(),
         };
         let mut canvas = canvas;
         if theme().scanlines {

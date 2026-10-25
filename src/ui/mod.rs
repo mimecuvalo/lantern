@@ -10,8 +10,10 @@
 pub mod blit;
 pub mod eq_window;
 pub mod font;
+pub mod gen_controls;
 pub mod geometry;
 pub mod layout;
+pub mod library_window;
 pub mod main_window;
 pub mod marquee;
 pub mod playlist_window;

@@ -4,7 +4,7 @@
 # Usage: scripts/create-dmg.sh <version> [path/to/Lantern.app]
 #
 #   version   — goes into the file name: release/Lantern-<version>-macOS-arm64.dmg
-#   app path  — defaults to the cargo-bundle output under target/release
+#   app path  — defaults to scripts/bundle-app.sh --release's output
 #
 # Deliberately plain: no Finder/AppleScript window layout, so it runs the
 # same on a headless CI runner and on a developer machine.
@@ -14,7 +14,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Lantern"
 
 VERSION="${1:?Usage: scripts/create-dmg.sh <version> [path/to/Lantern.app]}"
-APP="${2:-$PROJECT_DIR/target/release/bundle/osx/$APP_NAME.app}"
+APP="${2:-$PROJECT_DIR/target/release/$APP_NAME.app}"
 
 if [ ! -d "$APP" ]; then
   echo "error: app bundle not found: $APP" >&2

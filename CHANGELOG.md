@@ -12,9 +12,38 @@ the project, kept here because the git history itself was then cleared.
 
 ### Added
 
-- **Lantern**, an original built-in default skin: a cave at night, with
-  stone, moss, fireflies and glowing LCD digits. Used when no skin is chosen;
-  Default Skin in the main menu returns to it.
+- **The media library**, so far its window and what is behind it. Alt-L (or
+  Media Library in the Window menu and the main menu's Windows submenu) shows
+  and hides the window, which drags, snaps, docks and resizes like the
+  playlist. It is framed by the skin's `gen.bmp`, as in Winamp; skins without
+  one get Lantern's own frame in the style of the classic base skin. The new
+  Library menu (also on right-click in the window) adds folders to watch,
+  rescans them, and imports an Apple Music library — directly, with your
+  permission, or from its library XML file — with play counts, ratings and
+  playlists. Watched folders are rescanned at launch for what changed, and
+  playing a track counts the play. Inside, Winamp's layout: a tree of
+  Local Media (Audio, Most Played, Recently Added, Recently Played, Never
+  Played, Top Rated) and your playlists; a search box that narrows the list
+  as you type; a track list whose column headers sort it; Play and Enqueue
+  beneath, and the Library button for the menu. Double-click or Enter plays
+  the selection, or the whole list, in place of the playlist. Buttons and
+  scrollbars come from the skin's `genex.bmp`. Tracks drag from the list
+  onto the playlist, landing where they are dropped, or onto the main
+  window to join the end. The divider between tree and list drags; column
+  headers resize from their edges and move by dragging; right-click a
+  header to show or hide columns (Date Added, Bitrate and File too), or a
+  track to play, enqueue, rate, show in Finder or remove it from the
+  library. The layout is remembered.
+- **`scripts/bundle-app.sh`** builds Lantern into `Lantern.app` and can
+  launch it. Importing straight from Apple Music needs Lantern running as an
+  app; run from a terminal, the import now says so.
+- **Get More Skins…** in the main menu and the File menu opens the Winamp
+  Skin Museum (skins.webamp.org), where any skin downloads as a `.wsz` that
+  Load Skin… opens.
+- **Lantern's own skins**, original artwork drawn in code. Night is built in:
+  a starry sky, a crescent moon, glass controls, a critter peeking over the
+  display. Aurora, Dusk, Fireflies, Cave, Temple and Wireframe ship beside it
+  in `assets/skins/`. Default Skin in the main menu returns to Night.
 - **Polish.** Windows snap to each other's edges and to the screen's, the
   main window carries every window attached to it, and dragging no longer
   lags. The EQ's PRESETS menu has Winamp's seventeen stock presets. Always on
@@ -99,6 +128,60 @@ Newest first, grouped by day: each commit's subject in bold, its author and any
 co-authors, then its message body.
 
 ### 2026-10-11
+
+- **feat: Night's glass controls get brighter edges** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+  Full rim light on every edge and a lit top lip — the Bright trial —
+  instead of a faint outline, so the controls stand out against the sky.
+  Aurora, Dusk and Fireflies share Night's glass and gain it too. The
+  edge-trial scaffolding goes.
+
+- **feat: trial five brighter button edges for the Night skin** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+  Night's glass controls were hard to make out. The generator now writes
+  five edge treatments to skins/night-*.wsz (gitignored) to compare —
+  Bright, Crisp, Neon, Bevel and Cyan — beside the soft edge that still
+  ships unchanged. The render tests draw the trials when present.
+
+- **feat: Night becomes the built-in skin; Lantern's themes are committed** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+  The night sky is now the default; Default Skin returns to it. The other
+  themes ship in assets/skins/ (Aurora, Dusk, Fireflies, Cave, Temple,
+  Wireframe) instead of the gitignored skins/, and the render tests draw
+  them all. Grotto and Snowfall are dropped, and Fireflies' frog gives way
+  to a field mouse with a pink nose.
+
+- **docs: Winamp's stock skins may live in skins/ locally, never committed** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+- **feat: Get More Skins… opens the Winamp Skin Museum** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+  In the main menu and the menu bar's File menu, beside Load Skin… and
+  Default Skin. CLAUDE.md now says Winamp's own stock skins don't belong
+  in skins/ even locally.
+
+- **feat: five variations on the night-sky skin** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+  Night gains moods that change the sky, the ground, the creature peeking
+  over the display and the playlist panel's scene: Aurora (curtains over
+  snow-capped peaks, an owl), Dusk (a magenta horizon, hills, a setting
+  sun, a fox), Snowfall (falling snow, snow on every ledge, icicles, a
+  full moon, a hare) and Fireflies (tall grass, a swarm, a firefly jar, a
+  frog), beside the original Night. Written to skins/ to try; the
+  built-in default is unchanged.
+
+- **feat: five skin directions that differ in construction, not colour** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+  All blue, same fonts. Each theme now picks a style that builds the
+  surfaces: Cave (rim-lit brick, the default), Grotto (water-worn rock,
+  waterfalls, a pool, pebble buttons), Temple (dressed stone panels,
+  fluted pillars, a key-pattern frieze, carved buttons), Night (no stone:
+  a dithered sky, stars, a moon, glass controls) and Wireframe (a grid,
+  glowing outlines with corner brackets, scanlines). The playlist font is
+  Verdana throughout.
+
+- **chore: the repository now lives in ~/Sites/lantern** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
+
+- **docs: CHANGELOG notes the rename and brings the history up to date** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
 
 - **feat: five skin directions from one generator** — Mime Čuvalo, with Claude Opus 5.5 (1M context)
 

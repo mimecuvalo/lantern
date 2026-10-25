@@ -5,4 +5,6 @@
 //! that, so a Linux or Windows shell is an afternoon rather than a rewrite.
 
 #[cfg(target_os = "macos")]
+pub mod apple_music;
+#[cfg(target_os = "macos")]
 pub mod macos;

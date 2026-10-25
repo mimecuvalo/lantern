@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Lantern.app's Info.plist. scripts/bundle-app.sh fills in @VERSION@. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.nightlight.lantern</string>
+	<key>CFBundleName</key>
+	<string>Lantern</string>
+	<key>CFBundleDisplayName</key>
+	<string>Lantern</string>
+	<key>CFBundleExecutable</key>
+	<string>lantern</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Shown when Library > Import Apple Music Library first asks. -->
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Lantern imports the songs, play counts, ratings and playlists of your Apple Music library into its media library.</string>
+</dict>
+</plist>

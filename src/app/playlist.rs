@@ -76,6 +76,28 @@ impl App {
         self.request_redraw(PaneKind::Playlist);
     }
 
+    /// Put `entries` in before row `at`, as a drop onto the playlist does.
+    pub(crate) fn insert_entries(&mut self, at: usize, entries: Vec<Entry>) {
+        let mut asked = std::collections::HashSet::new();
+        for e in &entries {
+            if !e.tags_loaded && asked.insert(e.path.clone()) {
+                self.tags.request(e.path.clone());
+            }
+        }
+        self.playlist.insert(at, entries);
+        self.requeue();
+        self.request_redraw(PaneKind::Playlist);
+    }
+
+    /// The row a drop `local_y` pixels down the playlist window lands on:
+    /// before the row under it, or at the end below the last.
+    pub(crate) fn playlist_row_at(&self, local_y: i32) -> usize {
+        let (w, h) = self.playlist_size;
+        let list = playlist_window::list_area(w, h);
+        let row = self.pl_scroll + ((local_y - list.y).max(0) as u32 / ROW_HEIGHT) as usize;
+        row.min(self.playlist.len())
+    }
+
     /// Add files, folders, playlists and cue sheets, in order.
     pub(crate) fn add_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
         let mut entries: Vec<Entry> = Vec::new();

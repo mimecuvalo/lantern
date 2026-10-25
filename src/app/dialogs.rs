@@ -122,7 +122,12 @@ impl App {
         self.skin = Some(skin);
         self.skin_path = path;
         self.apply_region();
-        for kind in [PaneKind::Main, PaneKind::Equalizer, PaneKind::Playlist] {
+        for kind in [
+            PaneKind::Main,
+            PaneKind::Equalizer,
+            PaneKind::Playlist,
+            PaneKind::Library,
+        ] {
             self.request_redraw(kind);
         }
     }

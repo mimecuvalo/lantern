@@ -46,12 +46,16 @@ docs/
                                   is portable and valuable; the AppKit architecture
                                   sections are obsolete. Header explains which is which.
 scripts/
+  bundle-app.sh                 — build, wrap in Lantern.app (macos/Info.plist), sign
+                                  ad hoc; --open launches it as an app
   create-dmg.sh                 — .app -> signed-ish DMG via hdiutil. Language-agnostic.
   release-notes.sh              — feeds the CHANGELOG's top section to a GitHub Release.
 crates/
   lantern-skin/                    — .wsz bytes -> Skin; pure, no I/O
   lantern-audio/                   — decode, resample, EQ, output, analyser, tags
   lantern-playlist/                — playlist model; M3U/PLS/cue parsing; pure
+  lantern-library/                 — the media library: SQLite store, folder scans,
+                                  tags, views and search, Apple Music import
 src/
   main.rs                       — arguments, skin, event loop
   app/                          — one Pane per window; behaviour per window
@@ -62,6 +66,10 @@ assets/
                                   by `cargo run -p lantern-skin --example
                                   make_default_skin`; regenerate, don't edit
   skins/lantern-*.wsz           — the generator's other themes, committed too
+  fallback/gen.bmp, genex.bmp   — the generic window (media library) frame for
+                                  skins without one, base-skin style; original
+                                  art from the same generator, built into the
+                                  parser
 tests/fixtures/
   skins/lantern-fixture.wsz        — original-artwork test skin, generated (see Build)
   cue/                          — 7 cue sheets: UTF-8, Shift-JIS, CP-1251, CP-1252,
@@ -76,6 +84,7 @@ skins/                          — gitignored; third-party skins for local pars
 cargo build && cargo test --workspace
 cargo run -- <files, folders, .m3u, .pls or .cue ...>   # --skin <file.wsz>
 cargo run -p lantern-audio --example play -- "track.mp3" 5   # headless audio check
+scripts/bundle-app.sh --open                       # run as Lantern.app (Apple Music import)
 ```
 
 CI runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and a
@@ -117,7 +126,8 @@ guards CI.
 
 - **Branching** — work directly on `main`; no feature branches (decided
   2026-10-11). Don't push until the user says so.
-- **Commit granularity** — 1 task = 1 commit. Don't batch.
+- **Commits** — don't commit. Leave finished work staged (`git add`); the
+  user commits it (decided 2026-10-12). CHANGELOG.md is still yours to edit.
 - **Brainstorming** — use `superpowers:brainstorming` only when the task is
   genuinely ambiguous or needs design exploration. Given a clear task list, skip
   it and get to work.
@@ -135,5 +145,6 @@ Carried forward deliberately, not oversights:
 1. **Shaped windows.** Investigated at M2: a platform-shell feature. The macOS
    path (a root-layer mask in `platform/macos.rs`) is implemented but has not
    been seen on screen yet. See the architecture doc §6.
-2. **Music.app import.** `ITLibrary` needs an objc2 bridge; the XML path is
-   portable. See `docs/non-goals.md`.
+2. **App bundle.** `scripts/bundle-app.sh` makes a dev `Lantern.app` (needed for
+   Apple Music import); the rest of M7's packaging — icon, notarisation, release
+   CI — is still to come.

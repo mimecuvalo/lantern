@@ -56,6 +56,13 @@ without a window. It carries dependencies the UI loop should not recompile:
 holds the playlist model and the M3U/PLS/cue parsers. Tag reading stays in
 `lantern-audio` (`tags.rs`), which already has lofty.
 
+**Amended after M6: five units.** `crates/lantern-library` holds the media
+library: the SQLite store, watched-folder scans, the tags its columns need,
+the standing views and search, and Apple Music import (from the library XML;
+the iTunesLibrary framework is read in `platform/apple_music.rs`). Pure of UI
+and audio, so it tests headlessly; it keeps `rusqlite`'s bundled SQLite out
+of the UI loop's rebuilds. Scans run on a worker thread the app owns.
+
 The binary's `src/` also grew an `app/` directory at M5, once there were three
 windows. It holds one `Pane` per window (winit window, softbuffer surface,
 widget table) and a behaviour file per window: `player.rs`, `equalizer.rs`,
@@ -86,6 +93,8 @@ Not pinned in this table, which would only rot.
 | File dialogs | `rfd` | Native open/save panels (added M6). Shares the objc2 generation on macOS. |
 | Playlist text | `fontdue` | Rasterises the `pledit.txt` system font (added M5); see §6. |
 | Cue encodings | `encoding_rs`, `chardetng` | Shift-JIS/CP-1251/CP-1252 cue sheets (added M5), in `lantern-playlist`. |
+| Library store | `rusqlite`, feature `bundled` | The media library's tracks, history and playlists (added with the library). SQLite: crash-safe, incremental writes as a scan goes, and grows by migration. Bundled so every platform gets the same SQLite. **Rejected** a JSON file: rewriting tens of thousands of tracks for each play count. |
+| Library XML | `plist`, default features off | Reads Apple Music's and iTunes' library XML for import. |
 
 ## 5. Threading model
 
@@ -413,4 +422,4 @@ Sprite coordinates port from Webamp's `skinSprites.ts` (MIT).
 ## 11. Open questions
 
 - **Name.** Decided: Lantern (formerly Wamp). Clearance still to do; see `docs/legal.md` §5.
-- **Music.app import.** `ITLibrary` needs an objc2 bridge; the XML path is portable. Defer past M6.
+- **Music.app import.** Resolved with the library: `ITLibrary` through objc2, and the XML path. `ITLibrary`'s helper refuses a binary run from a terminal, so it needs the app bundle (`scripts/bundle-app.sh`), the first piece of M7.

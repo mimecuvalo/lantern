@@ -93,3 +93,29 @@ fn sprites_carry_the_generated_bevel() {
         "pressed frames are drawn with an inverted bevel"
     );
 }
+
+#[test]
+fn gen_letters_are_found_by_their_edges() {
+    let skin = fixture();
+    assert!(!skin.supplied(SheetId::Gen), "the fixture brings its own");
+    let font = skin.gen_font();
+    // The fixture's letters run 3, 4, 5, 6 wide, then repeat, with a 1px
+    // separator before each.
+    let a = font.letter('A', true).unwrap();
+    assert_eq!((a.x, a.y, a.w, a.h), (1, 88, 3, 7));
+    let b = font.letter('b', true).unwrap();
+    assert_eq!((b.x, b.w), (5, 4), "case-insensitive");
+    let e = font.letter('E', false).unwrap();
+    assert_eq!((e.x, e.y, e.w), (1 + 4 + 5 + 6 + 7, 96, 3));
+    assert_eq!(font.letter('7', true), None);
+    assert_eq!(font.width("AB C", true), 3 + 4 + 5 + 5);
+}
+
+#[test]
+fn genex_colours_come_from_their_swatches() {
+    let skin = fixture();
+    let c = skin.genex_colors();
+    assert_eq!(c.item_background, [0, 100, 200]);
+    assert_eq!(c.window_background, [20, 100, 200]);
+    assert_eq!(c.list_background_selected, [210, 100, 200]);
+}

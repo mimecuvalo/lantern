@@ -5,9 +5,14 @@
 //! achievable at all. They derive from Webamp's `skinSprites.ts` (MIT,
 //! Copyright (c) 2015 Jordan Eldredge).
 //!
-//! `gen.bmp`, `genex.bmp`, `video.bmp`, `mb.bmp` and `avs.bmp` skin windows
-//! this player does not have (media library, video, minibrowser, AVS), so
-//! they are deliberately not modelled.
+//! `gen.bmp` frames the generic windows — here, the media library — from
+//! Webamp's `GEN_*` sprites. Its title alphabet is variable-width and found
+//! by scanning the sheet; see [`crate::GenFont`]. `genex.bmp` carries the
+//! colours of the controls inside those windows ([`crate::GenExColors`]),
+//! and the controls themselves: buttons, scroll arrows and thumbs, laid out
+//! as in the stock skin's sheet.
+//! `video.bmp`, `mb.bmp` and `avs.bmp` skin windows this player does not
+//! have (video, minibrowser, AVS), so they are deliberately not modelled.
 
 use crate::font;
 
@@ -50,10 +55,14 @@ pub enum SheetId {
     EqEx,
     PlEdit,
     Text,
+    /// The generic window frame, and its title alphabet.
+    Gen,
+    /// Colours (and controls) for the insides of generic windows.
+    GenEx,
 }
 
 impl SheetId {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 16;
 
     /// Every sheet, for iteration during parsing.
     pub const ALL: [SheetId; Self::COUNT] = [
@@ -71,6 +80,8 @@ impl SheetId {
         SheetId::EqEx,
         SheetId::PlEdit,
         SheetId::Text,
+        SheetId::Gen,
+        SheetId::GenEx,
     ];
 
     /// Base filename, without extension. Lookup tries `.bmp` then `.png`,
@@ -91,6 +102,8 @@ impl SheetId {
             SheetId::EqEx => "eq_ex",
             SheetId::PlEdit => "pledit",
             SheetId::Text => "text",
+            SheetId::Gen => "gen",
+            SheetId::GenEx => "genex",
         }
     }
 }
@@ -394,6 +407,65 @@ pub enum SpriteKey {
     // text.bmp
     /// One 5x6 glyph of the bitmap font. Unknown characters draw as a space.
     Char(char),
+
+    // gen.bmp
+    // The title bar is built from six 25x20 pieces, focused row above
+    // unfocused: corners, the caps either side of the title, the fill
+    // behind the title, and the fill between corner and cap.
+    GenTopLeft {
+        active: bool,
+    },
+    GenTopLeftEnd {
+        active: bool,
+    },
+    GenTopCenterFill {
+        active: bool,
+    },
+    GenTopRightEnd {
+        active: bool,
+    },
+    GenTopLeftRightFill {
+        active: bool,
+    },
+    /// Holds the close button, unpressed, in its artwork.
+    GenTopRight {
+        active: bool,
+    },
+    GenBottomLeft,
+    GenBottomRight,
+    GenBottomFill,
+    GenMiddleLeft,
+    GenMiddleLeftBottom,
+    GenMiddleRight,
+    GenMiddleRightBottom,
+    /// The close button held down; unpressed, it is part of
+    /// [`SpriteKey::GenTopRight`].
+    GenClosePressed,
+
+    // genex.bmp
+    // Controls inside generic windows, each drawn at any size by keeping
+    // its ends and repeating its middle. The layout is the stock skin's.
+    GenExButton {
+        pressed: bool,
+    },
+    GenExScrollUp {
+        pressed: bool,
+    },
+    GenExScrollDown {
+        pressed: bool,
+    },
+    GenExScrollLeft {
+        pressed: bool,
+    },
+    GenExScrollRight {
+        pressed: bool,
+    },
+    GenExVerticalThumb {
+        pressed: bool,
+    },
+    GenExHorizontalThumb {
+        pressed: bool,
+    },
 }
 
 /// Where a sprite lives: which sheet, and the rectangle within it.
@@ -579,6 +651,29 @@ pub fn resolve(key: SpriteKey) -> (SheetId, Rect) {
         K::PlaylistCollapseButton => (S::PlEdit, r(62, 42, 9, 9)),
         K::PlaylistExpandButton => (S::PlEdit, r(150, 42, 9, 9)),
 
+        K::GenTopLeft { active } => (S::Gen, r(0, gen_row(active), 25, 20)),
+        K::GenTopLeftEnd { active } => (S::Gen, r(26, gen_row(active), 25, 20)),
+        K::GenTopCenterFill { active } => (S::Gen, r(52, gen_row(active), 25, 20)),
+        K::GenTopRightEnd { active } => (S::Gen, r(78, gen_row(active), 25, 20)),
+        K::GenTopLeftRightFill { active } => (S::Gen, r(104, gen_row(active), 25, 20)),
+        K::GenTopRight { active } => (S::Gen, r(130, gen_row(active), 25, 20)),
+        K::GenBottomLeft => (S::Gen, r(0, 42, 125, 14)),
+        K::GenBottomRight => (S::Gen, r(0, 57, 125, 14)),
+        K::GenBottomFill => (S::Gen, r(127, 72, 25, 14)),
+        K::GenMiddleLeft => (S::Gen, r(127, 42, 11, 29)),
+        K::GenMiddleLeftBottom => (S::Gen, r(158, 42, 11, 24)),
+        K::GenMiddleRight => (S::Gen, r(139, 42, 8, 29)),
+        K::GenMiddleRightBottom => (S::Gen, r(170, 42, 8, 24)),
+        K::GenClosePressed => (S::Gen, r(148, 42, 9, 9)),
+
+        K::GenExButton { pressed } => (S::GenEx, r(0, pick(pressed, 15, 0), 47, 15)),
+        K::GenExScrollUp { pressed } => (S::GenEx, r(pick(pressed, 28, 0), 31, 14, 14)),
+        K::GenExScrollDown { pressed } => (S::GenEx, r(pick(pressed, 42, 14), 31, 14, 14)),
+        K::GenExScrollLeft { pressed } => (S::GenEx, r(pick(pressed, 28, 0), 45, 14, 14)),
+        K::GenExScrollRight { pressed } => (S::GenEx, r(pick(pressed, 42, 14), 45, 14, 14)),
+        K::GenExVerticalThumb { pressed } => (S::GenEx, r(pick(pressed, 70, 56), 31, 14, 28)),
+        K::GenExHorizontalThumb { pressed } => (S::GenEx, r(84, pick(pressed, 45, 31), 28, 14)),
+
         K::Char(c) => {
             let (row, col) = font::cell(c);
             (
@@ -636,6 +731,14 @@ pub fn all_keys() -> Vec<SpriteKey> {
         K::PlaylistCloseButton,
         K::PlaylistCollapseButton,
         K::PlaylistExpandButton,
+        K::GenBottomLeft,
+        K::GenBottomRight,
+        K::GenBottomFill,
+        K::GenMiddleLeft,
+        K::GenMiddleLeftBottom,
+        K::GenMiddleRight,
+        K::GenMiddleRightBottom,
+        K::GenClosePressed,
     ];
     for b in [false, true] {
         keys.extend([
@@ -671,6 +774,19 @@ pub fn all_keys() -> Vec<SpriteKey> {
             K::PlaylistTopRightCorner { active: b },
             K::PlaylistShadeBackgroundRight { active: b },
             K::PlaylistScrollHandle { pressed: b },
+            K::GenTopLeft { active: b },
+            K::GenTopLeftEnd { active: b },
+            K::GenTopCenterFill { active: b },
+            K::GenTopRightEnd { active: b },
+            K::GenTopLeftRightFill { active: b },
+            K::GenTopRight { active: b },
+            K::GenExButton { pressed: b },
+            K::GenExScrollUp { pressed: b },
+            K::GenExScrollDown { pressed: b },
+            K::GenExScrollLeft { pressed: b },
+            K::GenExScrollRight { pressed: b },
+            K::GenExVerticalThumb { pressed: b },
+            K::GenExHorizontalThumb { pressed: b },
         ]);
         for p in [false, true] {
             keys.extend([
@@ -745,7 +861,14 @@ pub fn standard_size(id: SheetId) -> (u32, u32) {
         SheetId::EqEx => (275, 56),
         SheetId::PlEdit => (280, 186),
         SheetId::Text => (155, 18),
+        SheetId::Gen => (194, 109),
+        SheetId::GenEx => (130, 75),
     }
+}
+
+/// `gen.bmp`'s title pieces: focused at the top, unfocused a row below.
+const fn gen_row(active: bool) -> u32 {
+    pick(active, 0, 21)
 }
 
 /// Pressed variants sit one row down, by the button's own height.

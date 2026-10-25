@@ -91,6 +91,11 @@ impl App {
             match event {
                 Event::Opened(info) | Event::Advanced(info) => {
                     self.track_started(&info);
+                    // A cue sheet's later tracks are the same file: count
+                    // the file once, from its start.
+                    if info.start_secs < 1e-3 {
+                        self.library_played(&info.path);
+                    }
                     self.info = Some(info);
                     self.marquee.reset(now);
                     // Queue what follows now, so the decoder has it in hand

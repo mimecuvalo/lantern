@@ -18,6 +18,20 @@ use objc2_quartz_core::{CALayer, CAShapeLayer};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
+/// The clipboard's text, if it holds any.
+pub fn clipboard_text() -> Option<String> {
+    use objc2_foundation::NSString;
+    let class = objc2::runtime::AnyClass::get(c"NSPasteboard")?;
+    let kind = NSString::from_str("public.utf8-plain-text");
+    // SAFETY: NSPasteboard's documented `generalPasteboard` and
+    // `stringForType:`, which returns an NSString or nil.
+    let text: Option<Retained<NSString>> = unsafe {
+        let board: Retained<AnyObject> = msg_send![class, generalPasteboard];
+        msg_send![&*board, stringForType: &*kind]
+    };
+    text.map(|t| t.to_string())
+}
+
 /// Put the window's backing store in sRGB, the space skin colours are
 /// authored in. Pairs with [`tag_frame_srgb`].
 ///

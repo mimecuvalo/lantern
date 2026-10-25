@@ -23,6 +23,11 @@ pub(crate) enum MenuKind {
     Sort,
     Misc,
     Playlist,
+    Library,
+    /// Over the library's track list.
+    LibraryTracks,
+    /// Over its column headers.
+    LibraryColumns,
 }
 
 /// The Winamp Skin Museum: tens of thousands of classic skins, each a
@@ -47,6 +52,22 @@ fn open_url(url: &str) {
 
 /// Menu ids for the stock EQ presets: this, then the preset's index.
 const BUILTIN_PRESET: &str = "eq_builtin:";
+/// Menu ids for no longer watching a folder: this, then the folder.
+const UNWATCH: &str = "lib_unwatch:";
+/// Menu ids for rating the selected tracks: this, then the stars.
+const RATE: &str = "lib_rate:";
+/// Menu ids for showing or hiding a library column: this, then its index.
+const COLUMN: &str = "lib_column:";
+
+/// The library's own items, in the menu bar and its window's menu.
+fn library_items() -> [MenuItem; 4] {
+    [
+        item("lib_add_folder", "Add Folder to Library…"),
+        item("lib_rescan", "Rescan Watched Folders"),
+        item("lib_import_music", "Import Apple Music Library"),
+        item("lib_import_xml", "Import Library XML File…"),
+    ]
+}
 
 fn item(id: &str, text: &str) -> MenuItem {
     MenuItem::with_id(id, text, true, None)
@@ -114,6 +135,7 @@ impl App {
                     &[
                         &check("show_eq", "Equalizer", self.visible(PaneKind::Equalizer)),
                         &check("show_pl", "Playlist", self.visible(PaneKind::Playlist)),
+                        &check("show_lib", "Media Library", self.visible(PaneKind::Library)),
                     ],
                 )?;
                 menu.append_items(&[&playback, &options, &windows])?;
@@ -151,6 +173,44 @@ impl App {
                     &item("remove_dead", "Remove Dead Files"),
                     &item("save_list", "Save Playlist…"),
                 ])?;
+            }
+            MenuKind::Library => {
+                let [add, rescan, music, xml] = library_items();
+                menu.append_items(&[&add, &rescan, &sep(), &music, &xml])?;
+                let folders = self.library.folders();
+                if !folders.is_empty() {
+                    let unwatch = Submenu::new("Stop Watching", true);
+                    for f in &folders {
+                        let id = format!("{UNWATCH}{}", f.display());
+                        unwatch.append(&item(&id, &f.display().to_string()))?;
+                    }
+                    menu.append_items(&[&sep(), &unwatch])?;
+                }
+            }
+            MenuKind::LibraryTracks => {
+                let rate = Submenu::new("Rate", true);
+                for stars in (1..=5).rev() {
+                    let label = "★".repeat(stars) + &"☆".repeat(5 - stars);
+                    rate.append(&item(&format!("{RATE}{stars}"), &label))?;
+                }
+                rate.append_items(&[&sep(), &item(&format!("{RATE}0"), "No Rating")])?;
+                menu.append_items(&[
+                    &item("lib_play", "Play Selection"),
+                    &item("lib_enqueue", "Enqueue Selection"),
+                    &sep(),
+                    &rate,
+                    &sep(),
+                    &item("lib_reveal", "Show in Finder"),
+                    &item("lib_forget", "Remove from Library"),
+                ])?;
+            }
+            MenuKind::LibraryColumns => {
+                use crate::ui::library_window::ALL_COLUMNS;
+                for (i, c) in ALL_COLUMNS.iter().enumerate() {
+                    let id = format!("{COLUMN}{i}");
+                    menu.append(&check(&id, c.2, self.library_column_shown(i)))?;
+                }
+                menu.append_items(&[&sep(), &item("lib_columns_reset", "Reset Columns")])?;
             }
             MenuKind::Playlist => {
                 menu.append_items(&[
@@ -213,6 +273,19 @@ impl App {
             }
             return;
         }
+        if let Some(folder) = id.strip_prefix(UNWATCH) {
+            self.library_remove_folder(std::path::Path::new(folder));
+            return;
+        }
+        if let Some(stars) = id.strip_prefix(RATE).and_then(|s| s.parse().ok()) {
+            self.rate_library_selection(stars);
+            self.request_redraw(PaneKind::Library);
+            return;
+        }
+        if let Some(i) = id.strip_prefix(COLUMN).and_then(|s| s.parse().ok()) {
+            self.toggle_library_column(i);
+            return;
+        }
         match id {
             "play_files" => self.eject(),
             "play_folder" => {
@@ -242,6 +315,16 @@ impl App {
             "vis" => self.analyser_on = !self.analyser_on,
             "show_eq" => self.activate_main(layout::EQ_TOGGLE),
             "show_pl" => self.activate_main(layout::PL_TOGGLE),
+            "show_lib" => self.toggle_library(),
+            "lib_add_folder" => self.library_add_folder(),
+            "lib_rescan" => self.library_rescan(),
+            "lib_import_music" => self.library_import_apple_music(),
+            "lib_import_xml" => self.library_import_xml(),
+            "lib_play" => self.send_library_selection(true),
+            "lib_enqueue" => self.send_library_selection(false),
+            "lib_reveal" => self.reveal_library_selection(),
+            "lib_forget" => self.remove_library_selection(),
+            "lib_columns_reset" => self.reset_library_columns(),
             "about" => {
                 rfd::MessageDialog::new()
                     .set_title("About Lantern")
@@ -288,7 +371,12 @@ impl App {
             "save_list" => self.save_playlist_dialog(),
             _ => {}
         }
-        for kind in [PaneKind::Main, PaneKind::Equalizer, PaneKind::Playlist] {
+        for kind in [
+            PaneKind::Main,
+            PaneKind::Equalizer,
+            PaneKind::Playlist,
+            PaneKind::Library,
+        ] {
             self.request_redraw(kind);
         }
     }
@@ -346,8 +434,9 @@ impl App {
     }
 
     /// The macOS menu bar: an app menu with About and Quit, File, and Window
-    /// with Always on Top — findable there, and on Winamp's Ctrl+A. Also
-    /// replaces winit's default, whose Quit would skip saving settings.
+    /// with Always on Top and the media library — findable there, and on
+    /// Winamp's Ctrl+A and Alt+L. Also replaces winit's default, whose Quit
+    /// would skip saving settings.
     pub(crate) fn install_menu_bar(&mut self) {
         let build = || -> muda::Result<(Menu, CheckMenuItem)> {
             let bar = Menu::new();
@@ -384,8 +473,12 @@ impl App {
                 self.widget_on(layout::CLUTTER_A),
                 "Ctrl+A".parse::<Accelerator>().ok(),
             );
-            let window = Submenu::with_items("Window", true, &[&aot])?;
-            bar.append_items(&[&app, &file, &window])?;
+            let show = keyed("show_lib", "Media Library", "Alt+L");
+            let window = Submenu::with_items("Window", true, &[&aot, &show])?;
+            let [add, rescan, music, xml] = library_items();
+            let library =
+                Submenu::with_items("Library", true, &[&add, &rescan, &sep(), &music, &xml])?;
+            bar.append_items(&[&app, &file, &library, &window])?;
             Ok((bar, aot))
         };
         match build() {

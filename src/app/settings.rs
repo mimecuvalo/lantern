@@ -39,6 +39,13 @@ pub struct Settings {
     pub equalizer: WindowPlace,
     pub playlist: WindowPlace,
     pub playlist_size: (u32, u32),
+    pub library: WindowPlace,
+    pub library_size: (u32, u32),
+    /// The library's tree, as wide as the divider was left.
+    pub library_tree_width: u32,
+    /// The library's columns, in order: each one's name and width. Empty
+    /// for the defaults.
+    pub library_columns: Vec<(String, u32)>,
     /// Index of the current playlist entry.
     pub current: Option<usize>,
 }
@@ -66,6 +73,11 @@ impl Default for Settings {
             equalizer: shown,
             playlist: shown,
             playlist_size: (275, 232),
+            // Hidden until asked for, as in Winamp.
+            library: WindowPlace::default(),
+            library_size: (500, 348),
+            library_tree_width: 125,
+            library_columns: Vec::new(),
             current: None,
         }
     }
@@ -95,6 +107,7 @@ impl Settings {
             ("main", &self.main),
             ("equalizer", &self.equalizer),
             ("playlist", &self.playlist),
+            ("library", &self.library),
         ] {
             if let Some((x, y)) = place.position {
                 kv(&format!("{name}.position"), format!("{x},{y}"));
@@ -106,6 +119,19 @@ impl Settings {
             "playlist.size",
             format!("{},{}", self.playlist_size.0, self.playlist_size.1),
         );
+        kv(
+            "library.size",
+            format!("{},{}", self.library_size.0, self.library_size.1),
+        );
+        kv("library.tree_width", self.library_tree_width.to_string());
+        if !self.library_columns.is_empty() {
+            let columns: Vec<String> = self
+                .library_columns
+                .iter()
+                .map(|(name, w)| format!("{name}:{w}"))
+                .collect();
+            kv("library.columns", columns.join(","));
+        }
         if let Some(i) = self.current {
             kv("playlist.current", i.to_string());
         }
@@ -162,6 +188,21 @@ impl Settings {
                     self.playlist_size = size;
                 }
             }
+            "library.size" => {
+                if let Some(size) = pair(v) {
+                    self.library_size = size;
+                }
+            }
+            "library.tree_width" => set(&mut self.library_tree_width, v),
+            "library.columns" => {
+                self.library_columns = v
+                    .split(',')
+                    .filter_map(|c| {
+                        let (name, w) = c.split_once(':')?;
+                        Some((name.trim().to_string(), w.trim().parse().ok()?))
+                    })
+                    .collect();
+            }
             "playlist.current" => self.current = v.parse().ok(),
             _ => {
                 let Some((name, field)) = key.split_once('.') else {
@@ -171,6 +212,7 @@ impl Settings {
                     "main" => &mut self.main,
                     "equalizer" => &mut self.equalizer,
                     "playlist" => &mut self.playlist,
+                    "library" => &mut self.library,
                     _ => return,
                 };
                 match field {
@@ -250,6 +292,18 @@ pub fn save(settings: &Settings, playlist_m3u8: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_layout_round_trips() {
+        let s = Settings {
+            library_tree_width: 160,
+            library_columns: vec![("title".into(), 200), ("artist".into(), 90)],
+            ..Settings::default()
+        };
+        let back = Settings::from_text(&s.to_text());
+        assert_eq!(back.library_tree_width, 160);
+        assert_eq!(back.library_columns, s.library_columns);
+    }
 
     #[test]
     fn round_trips() {

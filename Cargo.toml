@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/lantern-skin", "crates/lantern-audio", "crates/lantern-playlist"]
+members = ["crates/lantern-skin", "crates/lantern-audio", "crates/lantern-playlist", "crates/lantern-library"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,6 +28,7 @@ workspace = true
 lantern-skin = { path = "crates/lantern-skin" }
 lantern-audio = { path = "crates/lantern-audio" }
 lantern-playlist = { path = "crates/lantern-playlist" }
+lantern-library = { path = "crates/lantern-library" }
 winit = "0.30.13"
 softbuffer = "0.4.8"
 anyhow = "1.0.104"

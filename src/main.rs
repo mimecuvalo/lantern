@@ -63,7 +63,7 @@ fn main() -> Result<()> {
                     path.display(),
                     SheetId::ALL
                         .iter()
-                        .filter(|id| skin.sheet(**id).is_some())
+                        .filter(|id| skin.sheet(**id).is_some() && !skin.supplied(**id))
                         .count(),
                     SheetId::COUNT
                 );
@@ -340,6 +340,91 @@ mod window_render_tests {
                     assert_ne!(at(w - 1, y), bg, "{name} {w}x{h}: right edge gap at y={y}");
                 }
                 dump(&format!("playlist-{name}-{w}x{h}"), &px, w, h);
+            }
+        }
+    }
+
+    #[test]
+    fn library_window_renders_at_any_size() {
+        use lantern_library::view::{Column, Sort};
+        use ui::gen_controls::ScrollState;
+        use ui::library_window::{self, LibraryView, ListRow, TreeRow};
+        let tree_row = |label: &str, depth, expander, selected| TreeRow {
+            label: label.into(),
+            depth,
+            expander,
+            selected,
+        };
+        let tree = vec![
+            tree_row("Local Media", 0, Some(true), false),
+            tree_row("Audio", 1, None, true),
+            tree_row("Most Played", 1, None, false),
+            tree_row("Recently Added", 1, None, false),
+            tree_row("Playlists", 0, Some(false), false),
+        ];
+        let rows: Vec<ListRow> = (1..=30)
+            .map(|n| ListRow {
+                cells: vec![
+                    "Sleater-Kinney".into(),
+                    format!("Song Number {n}"),
+                    "The Hot Rock".into(),
+                    "3:45".into(),
+                    n.to_string(),
+                    "Indie".into(),
+                    "1999".into(),
+                    "****".into(),
+                    "12".into(),
+                    "2026-01-02".into(),
+                ],
+                selected: n == 3 || n == 4,
+            })
+            .collect();
+        let scroll = |position, visible| ScrollState {
+            position,
+            visible,
+            pressed: None,
+        };
+        for (name, skin) in crate::tests::skins() {
+            let (min_w, min_h) = (library_window::MIN_WIDTH, library_window::MIN_HEIGHT);
+            for (w, h, focused) in [(500, 348, true), (min_w, min_h, false), (650, 464, false)] {
+                let mut px = vec![0u32; (w * h) as usize];
+                let tree_width = library_window::DEFAULT_TREE_WIDTH;
+                let shown = library_window::visible_rows(w, h, tree_width).1;
+                let view = LibraryView {
+                    focused,
+                    width: w,
+                    height: h,
+                    tree: tree.clone(),
+                    tree_scroll: scroll(0.0, 1.0),
+                    search: "hot rock".into(),
+                    caret: focused.then_some(3),
+                    sort: Some(Sort {
+                        column: Column::Artist,
+                        descending: false,
+                    }),
+                    rows: rows.iter().take(shown).cloned().collect(),
+                    list_scroll: scroll(0.3, 0.4),
+                    list_hscroll: scroll(0.0, 0.5),
+                    columns_offset: 0,
+                    columns: library_window::default_columns(),
+                    tree_width,
+                    column_drop: None,
+                    status: "1,234 items [3:24:11]".into(),
+                };
+                let font = ui::font::TextFont::load(&skin.playlist_style.font);
+                library_window::draw(
+                    &mut Surface::new(&mut px, w, h),
+                    Some(&skin),
+                    font.as_ref(),
+                    &view,
+                    &library_window::widgets(w, h, tree_width),
+                    1,
+                );
+                // Nothing is left unpainted: frame and contents cover it all.
+                let bg = ui::main_window::NO_SKIN_BACKGROUND;
+                let gaps = px.iter().filter(|p| **p == bg).count();
+                assert_eq!(gaps, 0, "{name} {w}x{h}: {gaps} pixels unpainted");
+                dump(&format!("library-{name}-{w}x{h}"), &px, w, h);
             }
         }
     }

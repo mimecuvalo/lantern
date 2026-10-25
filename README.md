@@ -62,6 +62,23 @@ development runs that shouldn't disturb your real setup:
 LANTERN_CONFIG_DIR=/tmp/lantern-dev cargo run -- sample.mp3
 ```
 
+**Media library.** Option-L opens it. The Library button (also the Library
+menu, and right-click in its window) adds folders to watch and imports your
+Apple Music library — its local songs, play counts, ratings and playlists.
+Pick a view or playlist in the tree, type to search, click a column header
+to sort, and double-click (or Play) to play; Enqueue adds to the playlist.
+Drag tracks onto the playlist to put them exactly there. Right-click a track
+to rate it, a column header to choose columns. Importing straight from
+Apple Music works only with Lantern running as an app, not from `cargo run`;
+build and launch one with:
+
+```bash
+scripts/bundle-app.sh --open             # --release for an optimised build
+```
+
+Or turn on Music's *Settings → Files → Share Library XML with other
+applications* and use Import Library XML File… instead.
+
 ## Developing
 
 Read [`CLAUDE.md`](CLAUDE.md) and

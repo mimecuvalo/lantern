@@ -10,6 +10,10 @@
 //! where they are dropped, or onto the main window, joining the end. The
 //! divider between tree and list drags; so do the headers' edges, to resize
 //! a column, and the headers themselves, to move one.
+//!
+//! The Audio view has Winamp's filter panes above the list: its artists,
+//! and the albums of the artist picked, each with an "All" line on top.
+//! Picking one narrows what is below it; double-clicking plays it.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -20,12 +24,13 @@ use lantern_playlist::Entry;
 use winit::event::{KeyEvent, MouseScrollDelta};
 use winit::keyboard::{Key, NamedKey};
 
+use super::text_edit::{Edit, TextEdit};
 use super::{App, DOUBLE_CLICK, PaneKind};
 use crate::ui::WidgetId;
 use crate::ui::gen_controls::{ARROW, ScrollPart, ScrollState, scroll_geometry, scroll_hit};
 use crate::ui::library_window::{
-    self as lw, ALL_COLUMNS, Columns, Layout, LibraryView, ListRow, MIN_COLUMN_WIDTH, ROW_HEIGHT,
-    TreeRow, clamp_tree_width, columns_width, default_columns,
+    self as lw, ALL_COLUMNS, Columns, FilterRow, FilterView, Layout, LibraryView, ListRow,
+    MIN_COLUMN_WIDTH, ROW_HEIGHT, TreeRow, clamp_tree_width, columns_width, default_columns,
 };
 
 /// A press moves this far before it becomes a drag.
@@ -85,9 +90,10 @@ pub(crate) struct LibraryUi {
     local_open: bool,
     playlists_open: bool,
     tree_scroll: usize,
-    search: String,
-    /// In chars.
-    caret: usize,
+    search: TextEdit,
+    /// A playlist of Lantern's own being renamed in the tree: its id, and
+    /// the name so far.
+    renaming: Option<(i64, TextEdit)>,
     /// `None`: the view's own order, or a playlist's.
     sort: Option<Sort>,
     /// Indices into the library's tracks, in list order.
@@ -104,6 +110,17 @@ pub(crate) struct LibraryUi {
     hold: Option<ScrollHold>,
     /// Where a held header is, while it is dragged.
     drag_x: i32,
+    /// What each filter pane, Artist then Album, has picked: `None` for
+    /// All.
+    filter: [Option<String>; 2],
+    /// Each pane's lines below All: a name ("" for none tagged) and its
+    /// tracks.
+    filter_rows: [Vec<(String, usize)>; 2],
+    /// Each pane's "All" count: the tracks it covers.
+    filter_totals: [usize; 2],
+    filter_scroll: [usize; 2],
+    /// For a double-click in a pane: when, which pane, which line.
+    filter_click: Option<(Instant, usize, usize)>,
 }
 
 impl Default for LibraryUi {
@@ -118,8 +135,8 @@ impl Default for LibraryUi {
             local_open: true,
             playlists_open: true,
             tree_scroll: 0,
-            search: String::new(),
-            caret: 0,
+            search: TextEdit::default(),
+            renaming: None,
             sort: None,
             rows: Vec::new(),
             built: None,
@@ -130,8 +147,52 @@ impl Default for LibraryUi {
             last_click: None,
             hold: None,
             drag_x: 0,
+            filter: [None, None],
+            filter_rows: [Vec::new(), Vec::new()],
+            filter_totals: [0, 0],
+            filter_scroll: [0, 0],
+            filter_click: None,
         }
     }
+}
+
+impl LibraryUi {
+    /// Whether the view has the Artist and Album panes: all audio does.
+    fn has_filters(&self) -> bool {
+        matches!(self.node, Node::LocalMedia | Node::View(View::Audio))
+    }
+}
+
+/// What a filter pane says for a name left untagged.
+const UNKNOWN: [&str; 2] = ["(Unknown Artist)", "(Unknown Album)"];
+
+/// The distinct values of `key` among `rows`, with how many rows have each,
+/// sorted without regard to case, the untagged last.
+fn distinct(
+    tracks: &[Track],
+    rows: &[usize],
+    key: impl Fn(&Track) -> &str,
+) -> Vec<(String, usize)> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for &i in rows {
+        *counts.entry(key(&tracks[i])).or_default() += 1;
+    }
+    let mut out: Vec<(String, usize)> = counts
+        .into_iter()
+        .map(|(k, n)| (k.to_string(), n))
+        .collect();
+    out.sort_by(|a, b| {
+        (a.0.is_empty(), a.0.to_lowercase()).cmp(&(b.0.is_empty(), b.0.to_lowercase()))
+    });
+    out
+}
+
+fn artist(t: &Track) -> &str {
+    &t.info.artist
+}
+
+fn album(t: &Track) -> &str {
+    &t.info.album
 }
 
 /// `secs` since the epoch as a date, yyyy-mm-dd (UTC).
@@ -227,28 +288,47 @@ pub(super) fn columns_from_settings(saved: &[(String, u32)]) -> Columns {
 
 impl App {
     /// The library window's layout, as it stands.
-    fn lib_layout(&self) -> Layout {
+    pub(super) fn lib_layout(&self) -> Layout {
         let (w, h) = self.library_size;
-        lw::layout(w, h, self.lib_ui.tree_width)
+        lw::layout(w, h, self.lib_ui.tree_width, self.lib_ui.has_filters())
     }
 
     /// Whole rows in view: in the tree, and in the list.
     fn lib_visible(&self) -> (usize, usize) {
         let (w, h) = self.library_size;
-        lw::visible_rows(w, h, self.lib_ui.tree_width)
+        lw::visible_rows(w, h, self.lib_ui.tree_width, self.lib_ui.has_filters())
+    }
+
+    /// Whole rows in view in the filter panes; none without them.
+    fn filter_visible(&self) -> usize {
+        self.lib_layout()
+            .filters
+            .map_or(0, |f| (f.lists[0].h / ROW_HEIGHT) as usize)
+    }
+
+    /// The library window's widgets, as its layout stands.
+    pub(super) fn library_widgets(&self) -> Vec<crate::ui::Widget> {
+        let (w, h) = self.library_size;
+        lw::widgets(w, h, self.lib_ui.tree_width, self.lib_ui.has_filters())
     }
 
     /// The tree's lines, top to bottom, with the node each selects.
     fn tree_items(&self) -> Vec<(Node, TreeRow)> {
         let ui = &self.lib_ui;
         let row = |node: Node, label: &str, depth: u8, expander: Option<bool>| {
+            // A playlist being renamed shows its name so far, and the caret.
+            let renaming = match (node, &ui.renaming) {
+                (Node::Playlist(id), Some((r, name))) if id == *r => Some(name),
+                _ => None,
+            };
             (
                 node,
                 TreeRow {
-                    label: label.to_string(),
+                    label: renaming.map_or_else(|| label.to_string(), |n| n.text.clone()),
                     depth,
                     expander,
                     selected: ui.node == node,
+                    editing: renaming.map(|n| n.caret),
                 },
             )
         };
@@ -285,13 +365,18 @@ impl App {
                     _ => View::Audio,
                 };
                 let sort = ui.sort.unwrap_or_else(|| v.default_sort());
-                view::select(tracks, v, &ui.search, sort, now)
+                let rows = view::select(tracks, v, &ui.search.text, sort, now);
+                if ui.has_filters() {
+                    self.apply_filters(rows)
+                } else {
+                    rows
+                }
             }
             Node::Playlists => Vec::new(),
             Node::Playlist(id) => {
                 let index: HashMap<i64, usize> =
                     tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-                let terms = view::terms(&ui.search);
+                let terms = view::terms(&ui.search.text);
                 let mut rows: Vec<usize> = self
                     .library
                     .playlists
@@ -319,6 +404,51 @@ impl App {
         ui.rows = rows;
         ui.built = Some(generation);
         ui.list_scroll = ui.list_scroll.min(ui.rows.len().saturating_sub(shown));
+    }
+
+    /// Fill the filter panes from `rows`, and narrow `rows` to what they
+    /// pick. A pick no longer among them — after a search, say — goes back
+    /// to All.
+    fn apply_filters(&mut self, rows: Vec<usize>) -> Vec<usize> {
+        let tracks = &self.library.tracks;
+        let ui = &mut self.lib_ui;
+        let artists = distinct(tracks, &rows, artist);
+        if ui.filter[0]
+            .as_ref()
+            .is_some_and(|a| !artists.iter().any(|(n, _)| n == a))
+        {
+            ui.filter[0] = None;
+        }
+        let by_artist: Vec<usize> = match &ui.filter[0] {
+            Some(a) => rows
+                .iter()
+                .copied()
+                .filter(|&i| artist(&tracks[i]) == a)
+                .collect(),
+            None => rows.clone(),
+        };
+        let albums = distinct(tracks, &by_artist, album);
+        if ui.filter[1]
+            .as_ref()
+            .is_some_and(|a| !albums.iter().any(|(n, _)| n == a))
+        {
+            ui.filter[1] = None;
+        }
+        let out: Vec<usize> = match &ui.filter[1] {
+            Some(a) => by_artist
+                .iter()
+                .copied()
+                .filter(|&i| album(&tracks[i]) == a)
+                .collect(),
+            None => by_artist.clone(),
+        };
+        ui.filter_totals = [rows.len(), by_artist.len()];
+        ui.filter_rows = [artists, albums];
+        for p in 0..2 {
+            let n = ui.filter_rows[p].len() + 1;
+            ui.filter_scroll[p] = ui.filter_scroll[p].min(n.saturating_sub(1));
+        }
+        out
     }
 
     /// The query changed: rebuild from the top, nothing selected.
@@ -415,8 +545,8 @@ impl App {
                 .map(|(_, r)| r)
                 .collect(),
             tree_scroll,
-            search: ui.search.clone(),
-            caret: focused.then_some(ui.caret),
+            search: ui.search.text.clone(),
+            caret: (focused && ui.renaming.is_none()).then_some(ui.search.caret),
             sort,
             rows,
             list_scroll,
@@ -425,14 +555,60 @@ impl App {
             columns: ui.columns.clone(),
             tree_width: ui.tree_width,
             column_drop: self.column_drop_x(),
+            filters: self.filter_view(),
             status,
         }
+    }
+
+    /// The filter panes' lines in view, if the view has them and they fit.
+    fn filter_view(&self) -> Option<FilterView> {
+        let ui = &self.lib_ui;
+        if !ui.has_filters() || self.lib_layout().filters.is_none() {
+            return None;
+        }
+        let shown = self.filter_visible();
+        let hold = |id| ui.hold.filter(|h| h.id == id).map(|h| h.part);
+        let pane = |p: usize| {
+            let what = ["artists", "albums"][p];
+            let names = &ui.filter_rows[p];
+            let all = FilterRow {
+                label: format!("All ({} {what})", names.len()),
+                count: ui.filter_totals[p],
+                selected: ui.filter[p].is_none(),
+            };
+            let lines = std::iter::once(all).chain(names.iter().map(|(n, count)| FilterRow {
+                label: if n.is_empty() {
+                    UNKNOWN[p].to_string()
+                } else {
+                    n.clone()
+                },
+                count: *count,
+                selected: ui.filter[p].as_ref() == Some(n),
+            }));
+            let rows: Vec<FilterRow> = lines.skip(ui.filter_scroll[p]).take(shown).collect();
+            let (position, visible) = bar(ui.filter_scroll[p], names.len() + 1, shown);
+            let scroll = ScrollState {
+                position,
+                visible,
+                pressed: hold(lw::FILTER_SCROLLS[p]),
+            };
+            (rows, scroll)
+        };
+        let (a, b) = (pane(0), pane(1));
+        Some(FilterView {
+            rows: [a.0, b.0],
+            scrolls: [a.1, b.1],
+        })
     }
 
     // -- Pointer ------------------------------------------------------------
 
     /// The pointer went down on `id` at logical `(x, y)`.
     pub(super) fn press_library(&mut self, id: WidgetId, x: i32, y: i32) {
+        // A click anywhere settles a rename under way.
+        if let Some((list, name)) = self.lib_ui.renaming.take() {
+            self.finish_rename(list, &name.text);
+        }
         let l = self.lib_layout();
         match id {
             lw::TREE => {
@@ -454,12 +630,16 @@ impl App {
                 } else if self.lib_ui.node != *node {
                     self.lib_ui.node = *node;
                     self.lib_ui.sort = None;
+                    self.lib_ui.filter = [None, None];
+                    self.lib_ui.filter_scroll = [0, 0];
                     self.requery();
+                    // The panes come and go with the view.
+                    self.relayout_library();
                 }
             }
             lw::SEARCH => {
                 let local = x - l.search.x - 2;
-                self.lib_ui.caret = self.caret_at(local);
+                self.lib_ui.search.caret = self.caret_at(local);
             }
             lw::HEADER => {
                 // On an edge it resizes the column to its left; elsewhere it
@@ -494,9 +674,46 @@ impl App {
                 }
             }
             lw::DIVIDER => self.lib_ui.divider_grab = Some(x - l.divider.x),
+            lw::ARTISTS | lw::ALBUMS => {
+                let pane = usize::from(id == lw::ALBUMS);
+                let Some(f) = l.filters else { return };
+                let line = ((y - f.lists[pane].y) / ROW_HEIGHT as i32).max(0) as usize
+                    + self.lib_ui.filter_scroll[pane];
+                self.click_filter(pane, line);
+            }
             _ => {}
         }
         self.request_redraw(PaneKind::Library);
+    }
+
+    /// A click on line `line` of filter pane `pane`: 0 is All. Picking an
+    /// artist starts its albums from All. A double-click plays what the
+    /// list then holds.
+    fn click_filter(&mut self, pane: usize, line: usize) {
+        let ui = &mut self.lib_ui;
+        if line > ui.filter_rows[pane].len() {
+            return;
+        }
+        let pick = line
+            .checked_sub(1)
+            .map(|n| ui.filter_rows[pane][n].0.clone());
+        if ui.filter[pane] != pick {
+            ui.filter[pane] = pick;
+            if pane == 0 {
+                ui.filter[1] = None;
+                ui.filter_scroll[1] = 0;
+            }
+            self.requery();
+        }
+        let now = Instant::now();
+        let double = self.lib_ui.filter_click.is_some_and(|(t, p, l)| {
+            p == pane && l == line && now.duration_since(t) < DOUBLE_CLICK
+        });
+        self.lib_ui.filter_click = Some((now, pane, line));
+        if double {
+            self.lib_ui.selected.clear();
+            self.send_library_selection(true);
+        }
     }
 
     fn sort_library_by(&mut self, column: Column) {
@@ -521,7 +738,7 @@ impl App {
             spacing: 0.5,
         };
         // Before the first character whose middle is past the pointer.
-        let chars: Vec<char> = self.lib_ui.search.chars().collect();
+        let chars: Vec<char> = self.lib_ui.search.text.chars().collect();
         let width = |n: usize| font.width(&chars[..n].iter().collect::<String>(), style);
         (0..chars.len())
             .find(|&n| (local_x as f32) < (width(n) + width(n + 1)) / 2.0)
@@ -600,11 +817,10 @@ impl App {
     /// The window's widgets, rebuilt for a new layout, keeping hold of
     /// whatever is held.
     pub(super) fn relayout_library(&mut self) {
-        let (w, h) = self.library_size;
-        let tree_width = self.lib_ui.tree_width;
+        let widgets = self.library_widgets();
         if let Some(p) = self.pane_mut(PaneKind::Library) {
             let held = p.input.active;
-            p.widgets = lw::widgets(w, h, tree_width);
+            p.widgets = widgets;
             if let Some(held) = held
                 && let Some(widget) = p.widgets.iter_mut().find(|x| x.id == held)
             {
@@ -731,6 +947,15 @@ impl App {
         let Some((gx, gy)) = self.global_cursor(PaneKind::Library) else {
             return;
         };
+        // Onto one of Lantern's playlists in the tree: added to its end.
+        if let Some((x, y)) = self.pane(PaneKind::Library).and_then(|p| p.input.cursor)
+            && self.lib_layout().tree.contains(x, y)
+        {
+            if let Some(Node::Playlist(id)) = self.tree_node_at(y) {
+                self.send_selection_to_playlist(id);
+            }
+            return;
+        }
         let (kinds, rects, shown) = self.frames();
         let target = (0..kinds.len()).find(|&i| {
             let r = rects[i];
@@ -756,9 +981,16 @@ impl App {
     pub(super) fn drag_library_scroll(&mut self, id: WidgetId, x: i32, y: i32) {
         let l = self.lib_layout();
         let (tree_shown, list_shown) = self.lib_visible();
+        let pane = usize::from(id == lw::ALBUMS_SCROLL);
+        let filter_shown = self.filter_visible();
         let (rect, vertical, total, shown) = match id {
             lw::TREE_SCROLL => (l.tree_scroll, true, self.tree_items().len(), tree_shown),
             lw::LIST_SCROLL => (l.list_scroll, true, self.lib_ui.rows.len(), list_shown),
+            lw::ARTISTS_SCROLL | lw::ALBUMS_SCROLL => {
+                let Some(f) = l.filters else { return };
+                let lines = self.lib_ui.filter_rows[pane].len() + 1;
+                (f.scrolls[pane], true, lines, filter_shown)
+            }
             _ => (
                 l.list_hscroll,
                 false,
@@ -769,6 +1001,7 @@ impl App {
         let offset = match id {
             lw::TREE_SCROLL => self.lib_ui.tree_scroll,
             lw::LIST_SCROLL => self.lib_ui.list_scroll,
+            lw::ARTISTS_SCROLL | lw::ALBUMS_SCROLL => self.lib_ui.filter_scroll[pane],
             _ => self.lib_ui.columns_offset as usize,
         };
         let (len, along) = if vertical {
@@ -814,6 +1047,7 @@ impl App {
         match id {
             lw::TREE_SCROLL => self.lib_ui.tree_scroll = new,
             lw::LIST_SCROLL => self.lib_ui.list_scroll = new,
+            lw::ARTISTS_SCROLL | lw::ALBUMS_SCROLL => self.lib_ui.filter_scroll[pane] = new,
             _ => self.lib_ui.columns_offset = new as u32,
         }
         self.request_redraw(PaneKind::Library);
@@ -838,14 +1072,24 @@ impl App {
                 -(p.y / scale / f64::from(ROW_HEIGHT)) as f32,
             ),
         };
-        let over_tree = self
-            .pane(PaneKind::Library)
-            .and_then(|p| p.input.cursor)
-            .is_some_and(|(x, _)| x < l.tree_scroll.x + ARROW as i32);
+        let cursor = self.pane(PaneKind::Library).and_then(|p| p.input.cursor);
+        let over_tree = cursor.is_some_and(|(x, _)| x < l.tree_scroll.x + ARROW as i32);
+        // Over a filter pane, or its scrollbar: that pane.
+        let over_pane = l.filters.zip(cursor).and_then(|(f, (x, y))| {
+            (0..2).find(|&p| {
+                let r = f.lists[p];
+                let s = f.scrolls[p];
+                x >= r.x && x < s.x + s.w as i32 && y >= s.y && y < s.y + s.h as i32
+            })
+        });
+        let filter_shown = self.filter_visible();
         let ui = &mut self.lib_ui;
         let by =
             |at: usize, d: f32, max: usize| ((at as f32 + d).round().max(0.0) as usize).min(max);
-        if over_tree {
+        if let Some(p) = over_pane {
+            let lines = ui.filter_rows[p].len() + 1;
+            ui.filter_scroll[p] = by(ui.filter_scroll[p], dy, lines.saturating_sub(filter_shown));
+        } else if over_tree {
             let n = self.tree_items().len();
             self.lib_ui.tree_scroll = by(self.lib_ui.tree_scroll, dy, n.saturating_sub(tree_shown));
         } else {
@@ -854,6 +1098,245 @@ impl App {
             ui.columns_offset = by(ui.columns_offset as usize, dx, max) as u32;
         }
         self.request_redraw(PaneKind::Library);
+    }
+
+    // -- Playlists ------------------------------------------------------------
+
+    /// `base`, or `base 2`, `base 3`… — whichever no playlist has yet.
+    fn unused_playlist_name(&self, base: &str) -> String {
+        let taken = |n: &str| self.library.playlists.iter().any(|p| p.name == n);
+        (1..)
+            .map(|n| {
+                if n == 1 {
+                    base.to_string()
+                } else {
+                    format!("{base} {n}")
+                }
+            })
+            .find(|n| !taken(n))
+            .unwrap_or_else(|| base.to_string())
+    }
+
+    /// Show a playlist: select it in the tree, its heading open.
+    fn show_library_playlist(&mut self, id: i64) {
+        self.lib_ui.playlists_open = true;
+        self.lib_ui.node = Node::Playlist(id);
+        self.lib_ui.sort = None;
+        self.lib_ui.filter = [None, None];
+        self.requery();
+        self.relayout_library();
+    }
+
+    /// Make a playlist of `tracks` (ids, perhaps none), show it, and start
+    /// naming it.
+    pub(super) fn new_library_playlist(&mut self, tracks: &[i64]) {
+        let name = self.unused_playlist_name("New Playlist");
+        if let Some(id) = self.library.create_playlist(&name, tracks) {
+            self.show_library_playlist(id);
+            self.start_rename(id);
+        }
+    }
+
+    /// The current playlist, saved into the library: it shows when saved.
+    pub(super) fn save_playlist_to_library(&mut self) {
+        let paths: Vec<std::path::PathBuf> = self
+            .playlist
+            .entries()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let name = self.unused_playlist_name("Saved Playlist");
+        self.library.save_playlist(name, paths);
+        self.show_library();
+    }
+
+    /// A playlist saved from the playlist window has arrived: show it and
+    /// start naming it.
+    pub(super) fn show_saved_playlist(&mut self) {
+        if let Some(id) = self.library.saved.take() {
+            self.show_library_playlist(id);
+            self.start_rename(id);
+        }
+    }
+
+    /// Start renaming one of Lantern's own playlists in the tree.
+    pub(super) fn start_rename(&mut self, id: i64) {
+        let Some(p) = self
+            .library
+            .playlist(id)
+            .filter(|_| self.library.is_own(id))
+        else {
+            return;
+        };
+        self.lib_ui.renaming = Some((id, TextEdit::new(&p.name)));
+        // Keep it in view.
+        let items = self.tree_items();
+        if let Some(i) = items.iter().position(|(n, _)| *n == Node::Playlist(id)) {
+            let shown = self.lib_visible().0.max(1);
+            let ui = &mut self.lib_ui;
+            if i < ui.tree_scroll {
+                ui.tree_scroll = i;
+            } else if i >= ui.tree_scroll + shown {
+                ui.tree_scroll = i + 1 - shown;
+            }
+        }
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// Settle a rename: a name left blank keeps the old one.
+    fn finish_rename(&mut self, id: i64, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() && self.library.playlist(id).is_some_and(|p| p.name != name) {
+            self.library.rename_playlist(id, name);
+        }
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// Delete a playlist, once the user agrees. Its tracks stay.
+    pub(super) fn delete_library_playlist(&mut self, id: i64) {
+        let Some(name) = self.library.playlist(id).map(|p| p.name.clone()) else {
+            return;
+        };
+        let answer = rfd::MessageDialog::new()
+            .set_title("Delete Playlist")
+            .set_description(format!(
+                "Delete the playlist \u{201c}{name}\u{201d}? Its tracks stay in the library."
+            ))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                "Delete".into(),
+                "Cancel".into(),
+            ))
+            .show();
+        if answer != rfd::MessageDialogResult::Custom("Delete".into()) {
+            return;
+        }
+        self.library.delete_playlist(id);
+        if self.lib_ui.node == Node::Playlist(id) {
+            self.lib_ui.node = Node::Playlists;
+            self.requery();
+        }
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// The playlist the tree has selected, if it is one of Lantern's own.
+    pub(super) fn own_playlist_shown(&self) -> Option<i64> {
+        match self.lib_ui.node {
+            Node::Playlist(id) if self.library.is_own(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The node the tree has selected, if a playlist.
+    pub(super) fn playlist_selected_in_tree(&self) -> Option<i64> {
+        match self.lib_ui.node {
+            Node::Playlist(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Add the selected tracks (or every row) to the end of playlist `id`.
+    pub(super) fn send_selection_to_playlist(&mut self, id: i64) {
+        self.refresh_library_rows();
+        let ids: Vec<i64> = self
+            .library_selection()
+            .into_iter()
+            .map(|i| self.library.tracks[i].id)
+            .collect();
+        self.append_to_playlist(id, &ids);
+    }
+
+    fn append_to_playlist(&mut self, id: i64, ids: &[i64]) {
+        if ids.is_empty() || !self.library.is_own(id) {
+            return;
+        }
+        let mut tracks = self
+            .library
+            .playlist(id)
+            .map(|p| p.tracks.clone())
+            .unwrap_or_default();
+        tracks.extend_from_slice(ids);
+        self.library.set_playlist_tracks(id, &tracks);
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// A new playlist of the selected tracks (or every row).
+    pub(super) fn send_selection_to_new_playlist(&mut self) {
+        self.refresh_library_rows();
+        let ids: Vec<i64> = self
+            .library_selection()
+            .into_iter()
+            .map(|i| self.library.tracks[i].id)
+            .collect();
+        self.new_library_playlist(&ids);
+    }
+
+    /// Take the selected tracks out of the playlist shown. They stay in the
+    /// library.
+    pub(super) fn remove_selection_from_playlist(&mut self) {
+        let Some(id) = self.own_playlist_shown() else {
+            return;
+        };
+        let selected = self.lib_ui.selected.clone();
+        let tracks: Vec<i64> = self
+            .library
+            .playlist(id)
+            .map(|p| {
+                p.tracks
+                    .iter()
+                    .copied()
+                    .filter(|t| !selected.contains(t))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.library.set_playlist_tracks(id, &tracks);
+        self.lib_ui.selected.clear();
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// Play, or enqueue, a whole library playlist.
+    pub(super) fn send_library_playlist(&mut self, id: i64, replace: bool) {
+        let index: HashMap<i64, usize> = self
+            .library
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, i))
+            .collect();
+        let entries: Vec<Entry> = self
+            .library
+            .playlist(id)
+            .map(|p| {
+                p.tracks
+                    .iter()
+                    .filter_map(|t| index.get(t))
+                    .map(|&i| entry(&self.library.tracks[i]))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if entries.is_empty() {
+            return;
+        }
+        if replace {
+            self.playlist.clear();
+            self.pl_scroll = 0;
+            self.add_entries(entries);
+            self.play_entry(0);
+        } else {
+            self.add_entries(entries);
+        }
+    }
+
+    /// The tree's node under logical `y`, if any.
+    fn tree_node_at(&self, y: i32) -> Option<Node> {
+        let l = self.lib_layout();
+        if y < l.tree.y || y >= l.tree.y + l.tree.h as i32 {
+            return None;
+        }
+        let i = ((y - l.tree.y) / ROW_HEIGHT as i32) as usize + self.lib_ui.tree_scroll;
+        self.tree_items().get(i).map(|(n, _)| *n)
     }
 
     // -- Buttons --------------------------------------------------------------
@@ -890,6 +1373,17 @@ impl App {
         if l.list.contains(x, y) {
             self.select_library_row_at(y - l.list.y);
             MenuKind::LibraryTracks
+        } else if l.tree.contains(x, y) {
+            // On a playlist, its menu; the tree's own anywhere else.
+            if let Some(node @ Node::Playlist(_)) = self.tree_node_at(y)
+                && self.lib_ui.node != node
+            {
+                self.lib_ui.node = node;
+                self.lib_ui.sort = None;
+                self.requery();
+                self.relayout_library();
+            }
+            MenuKind::LibraryTree
         } else if l.header.contains(x, y) {
             MenuKind::LibraryColumns
         } else {
@@ -972,7 +1466,7 @@ impl App {
     /// The library window's buttons, released over.
     pub(super) fn activate_library_button(&mut self, id: WidgetId) {
         match id {
-            lw::CLEAR => self.set_search(String::new(), 0),
+            lw::CLEAR => self.set_search(TextEdit::default()),
             lw::PLAY => self.send_library_selection(true),
             lw::ENQUEUE => self.send_library_selection(false),
             lw::LIBRARY_BUTTON => {
@@ -1001,68 +1495,46 @@ impl App {
 
     // -- Keys -----------------------------------------------------------------
 
-    fn set_search(&mut self, text: String, caret: usize) {
-        self.lib_ui.caret = caret.min(text.chars().count());
-        if text != self.lib_ui.search {
-            self.lib_ui.search = text;
+    fn set_search(&mut self, search: TextEdit) {
+        let changed = search.text != self.lib_ui.search.text;
+        self.lib_ui.search = search;
+        if changed {
             self.requery();
         }
         self.request_redraw(PaneKind::Library);
     }
 
-    /// Keys while the library has focus: typing goes to the search box, the
-    /// arrows move through the list. True if the key was used.
+    /// Keys while the library has focus: a playlist's new name while it is
+    /// renamed; otherwise the arrows move through the list, Enter plays,
+    /// and typing goes to the search box. True if the key was used.
     pub(super) fn library_key(&mut self, event: &KeyEvent) -> bool {
         let m = self.modifiers;
-        if m.control_key() || m.alt_key() {
-            return false;
-        }
-        let search = self.lib_ui.search.clone();
-        let caret = self.lib_ui.caret;
-        let chars: Vec<char> = search.chars().collect();
-        let joined = |c: &[char]| c.iter().collect::<String>();
-        if m.super_key() {
-            match &event.logical_key {
-                Key::Character(c) if c.eq_ignore_ascii_case("a") => {
-                    self.lib_ui.selected = self
-                        .lib_ui
-                        .rows
-                        .iter()
-                        .map(|&i| self.library.tracks[i].id)
-                        .collect();
+        let typed = event.text.as_deref();
+        if let Some((id, mut name)) = self.lib_ui.renaming.take() {
+            match name.key(&event.logical_key, typed, m) {
+                Edit::Submit => self.finish_rename(id, &name.text),
+                Edit::Cancel => {}
+                Edit::Ignored if m.control_key() || m.alt_key() => {
+                    self.lib_ui.renaming = Some((id, name));
+                    return false;
                 }
-                Key::Character(c) if c.eq_ignore_ascii_case("v") => {
-                    #[cfg(target_os = "macos")]
-                    if let Some(paste) = crate::platform::macos::clipboard_text() {
-                        let paste: String = paste.chars().filter(|c| !c.is_control()).collect();
-                        let n = paste.chars().count();
-                        let mut text = joined(&chars[..caret]);
-                        text.push_str(&paste);
-                        text.push_str(&joined(&chars[caret..]));
-                        self.set_search(text, caret + n);
-                    }
-                }
-                Key::Named(NamedKey::Backspace) => self.set_search(joined(&chars[caret..]), 0),
-                _ => return false,
+                _ => self.lib_ui.renaming = Some((id, name)),
             }
             self.request_redraw(PaneKind::Library);
             return true;
         }
+        if m.control_key() || m.alt_key() {
+            return false;
+        }
         match &event.logical_key {
-            Key::Named(NamedKey::Backspace) if caret > 0 => {
-                let text = joined(&chars[..caret - 1]) + &joined(&chars[caret..]);
-                self.set_search(text, caret - 1);
+            Key::Character(c) if m.super_key() && c.eq_ignore_ascii_case("a") => {
+                self.lib_ui.selected = self
+                    .lib_ui
+                    .rows
+                    .iter()
+                    .map(|&i| self.library.tracks[i].id)
+                    .collect();
             }
-            Key::Named(NamedKey::Delete) if caret < chars.len() => {
-                let text = joined(&chars[..caret]) + &joined(&chars[caret + 1..]);
-                self.set_search(text, caret);
-            }
-            Key::Named(NamedKey::Backspace | NamedKey::Delete) => {}
-            Key::Named(NamedKey::ArrowLeft) => self.lib_ui.caret = caret.saturating_sub(1),
-            Key::Named(NamedKey::ArrowRight) => self.lib_ui.caret = (caret + 1).min(chars.len()),
-            Key::Named(NamedKey::Home) => self.lib_ui.caret = 0,
-            Key::Named(NamedKey::End) => self.lib_ui.caret = chars.len(),
-            Key::Named(NamedKey::Escape) => self.set_search(String::new(), 0),
             Key::Named(NamedKey::Enter) => self.send_library_selection(true),
             Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown) => {
                 let down = matches!(event.logical_key, Key::Named(NamedKey::ArrowDown));
@@ -1079,16 +1551,14 @@ impl App {
                     at.saturating_sub(shown)
                 };
             }
-            _ => {
-                let Some(text) = event.text.as_ref() else {
-                    return false;
-                };
-                let typed: Vec<char> = text.chars().filter(|c| !c.is_control()).collect();
-                if typed.is_empty() {
-                    return false;
+            key => {
+                let mut search = self.lib_ui.search.clone();
+                match search.key(key, typed, m) {
+                    Edit::Ignored => return false,
+                    // Escape empties the search, as Clear Search does.
+                    Edit::Cancel => self.set_search(TextEdit::default()),
+                    _ => self.set_search(search),
                 }
-                let new = joined(&chars[..caret]) + &joined(&typed) + &joined(&chars[caret..]);
-                self.set_search(new, caret + typed.len());
             }
         }
         self.request_redraw(PaneKind::Library);
@@ -1122,6 +1592,26 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_lines_count_and_sort_with_untagged_last() {
+        let track = |artist: &str| {
+            let mut t = Track::default();
+            t.info.artist = artist.into();
+            t
+        };
+        let tracks = vec![track("b"), track(""), track("A"), track("b")];
+        let all: Vec<usize> = (0..tracks.len()).collect();
+        assert_eq!(
+            distinct(&tracks, &all, artist),
+            [
+                ("A".to_string(), 1),
+                ("b".to_string(), 2),
+                (String::new(), 1)
+            ]
+        );
+        assert_eq!(distinct(&tracks, &[0, 3], artist), [("b".to_string(), 2)]);
+    }
 
     #[test]
     fn columns_round_trip_through_settings() {

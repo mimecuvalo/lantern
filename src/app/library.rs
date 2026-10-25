@@ -4,7 +4,8 @@
 //! watched folders and imports from Apple Music run on a worker thread, one
 //! job at a time; their results come back here, to the UI thread, which
 //! writes them to the database in batches and keeps the tracks in memory
-//! for the views.
+//! for the views. While Lantern runs, the watched folders are watched too:
+//! once changes there settle, they are rescanned.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +31,10 @@ pub(super) fn min_library_size((w, h): (u32, u32)) -> (u32, u32) {
     )
 }
 
+/// Changes in the watched folders must be quiet this long before a rescan,
+/// so a copy of a whole album is one rescan, not dozens.
+const SETTLE: Duration = Duration::from_secs(2);
+
 /// While a scan runs, the views refresh at most this often.
 const RELOAD_EVERY: Duration = Duration::from_secs(1);
 
@@ -40,12 +45,24 @@ enum Job {
     },
     AppleMusic,
     Xml(PathBuf),
+    /// Make a library playlist of these files, first reading the tags of
+    /// any the library does not have.
+    Save {
+        name: String,
+        paths: Vec<PathBuf>,
+        known: std::collections::HashSet<PathBuf>,
+    },
 }
 
 enum Done {
     Scan(Event),
     ScanFinished,
     Imported(Result<Imported, String>),
+    Saved {
+        name: String,
+        paths: Vec<PathBuf>,
+        new: Vec<TrackInfo>,
+    },
 }
 
 /// What the library is busy with, for the status line.
@@ -79,6 +96,15 @@ pub(crate) struct LibraryState {
     /// Bumped whenever `tracks` or `playlists` change, so views know to
     /// rebuild.
     pub(crate) generation: u64,
+    /// Nudges the event loop from other threads.
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Watches the watched folders; replaced when they change.
+    watch: Option<lantern_library::watch::FolderWatch>,
+    /// The watch saw changes settle: rescan when free.
+    changed: Arc<AtomicBool>,
+    /// A playlist just saved from the playlist window, for the window to
+    /// show and name.
+    pub(crate) saved: Option<i64>,
 }
 
 impl LibraryState {
@@ -104,13 +130,20 @@ impl LibraryState {
             reloaded: Instant::now(),
             message: None,
             generation: 0,
+            wake: None,
+            watch: None,
+            changed: Arc::new(AtomicBool::new(false)),
+            saved: None,
         };
         state.reload();
         state
     }
 
     /// Start the worker. `wake` nudges the event loop when results arrive.
-    pub(crate) fn start(&mut self, wake: impl Fn() + Send + 'static) {
+    pub(crate) fn start(&mut self, wake: impl Fn() + Send + Sync + 'static) {
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
+        self.wake = Some(Arc::clone(&wake));
+        self.watch_folders();
         let (jobs, inbox) = channel::<Job>();
         let (outbox, results) = channel();
         let cancel = Arc::clone(&self.cancel);
@@ -134,6 +167,14 @@ impl LibraryState {
                         Job::Xml(file) => send(Done::Imported(
                             lantern_library::import::read_xml(&file).map_err(|e| e.to_string()),
                         )),
+                        Job::Save { name, paths, known } => {
+                            let new = paths
+                                .iter()
+                                .filter(|p| !known.contains(*p) && scan::is_audio(p) && p.is_file())
+                                .map(|p| lantern_library::tags::read(p))
+                                .collect();
+                            send(Done::Saved { name, paths, new })
+                        }
                     };
                     if !ok || cancel.load(Ordering::Relaxed) {
                         break;
@@ -146,6 +187,26 @@ impl LibraryState {
                 self.results = Some(results);
             }
             Err(e) => eprintln!("could not start the library worker: {e}"),
+        }
+    }
+
+    /// Watch the watched folders as they now are.
+    pub(crate) fn watch_folders(&mut self) {
+        let Some(wake) = self.wake.clone() else {
+            return;
+        };
+        let folders = self.folders();
+        self.watch = None;
+        if folders.is_empty() {
+            return;
+        }
+        let changed = Arc::clone(&self.changed);
+        match lantern_library::watch::FolderWatch::start(&folders, SETTLE, move || {
+            changed.store(true, Ordering::Relaxed);
+            wake();
+        }) {
+            Ok(w) => self.watch = Some(w),
+            Err(e) => eprintln!("cannot watch the library's folders: {e}"),
         }
     }
 
@@ -192,12 +253,18 @@ impl LibraryState {
     /// Take in whatever the worker has finished. True if anything changed
     /// that the window shows.
     fn poll(&mut self) -> bool {
+        // The folders changed: rescan, once nothing else is under way.
+        let mut moved = false;
+        if self.busy.is_none() && self.changed.swap(false, Ordering::Relaxed) {
+            self.rescan();
+            moved = true;
+        }
         let Some(results) = &self.results else {
-            return false;
+            return moved;
         };
         let done: Vec<Done> = results.try_iter().collect();
         if done.is_empty() {
-            return false;
+            return moved;
         }
         for d in done {
             match d {
@@ -217,6 +284,24 @@ impl LibraryState {
                     self.pending.push(info);
                 }
                 Done::ScanFinished => self.finish_job(),
+                Done::Saved { name, paths, new } => {
+                    if let Some(db) = &mut self.db {
+                        let made = db
+                            .upsert(&new, lantern_library::now())
+                            .and_then(|()| db.ids_of(&paths))
+                            .and_then(|ids| {
+                                let id = db.create_playlist(&name)?;
+                                db.set_playlist_tracks(id, &ids)?;
+                                Ok(id)
+                            });
+                        match made {
+                            Ok(id) => self.saved = Some(id),
+                            Err(e) => eprintln!("could not save the playlist: {e}"),
+                        }
+                    }
+                    self.stale = true;
+                    self.finish_job();
+                }
                 Done::Imported(result) => {
                     self.message = Some(match result {
                         Ok(imported) => self.import(&imported),
@@ -291,6 +376,67 @@ impl LibraryState {
         self.message = None;
     }
 
+    pub(crate) fn playlist(&self, id: i64) -> Option<&Playlist> {
+        self.playlists.iter().find(|p| p.id == id)
+    }
+
+    /// Whether the playlist was made here, and so can be changed; imported
+    /// ones are replaced on the next import.
+    pub(crate) fn is_own(&self, id: i64) -> bool {
+        self.playlist(id)
+            .is_some_and(|p| p.source == lantern_library::OWN)
+    }
+
+    /// A new playlist of these tracks; its id.
+    pub(crate) fn create_playlist(&mut self, name: &str, tracks: &[i64]) -> Option<i64> {
+        let db = self.db.as_mut()?;
+        let made = db.create_playlist(name).and_then(|id| {
+            db.set_playlist_tracks(id, tracks)?;
+            Ok(id)
+        });
+        let id = made
+            .inspect_err(|e| eprintln!("could not make a playlist: {e}"))
+            .ok();
+        self.reload();
+        id
+    }
+
+    pub(crate) fn rename_playlist(&mut self, id: i64, name: &str) {
+        if let Some(db) = &self.db
+            && let Err(e) = db.rename_playlist(id, name)
+        {
+            eprintln!("could not rename the playlist: {e}");
+        }
+        self.reload();
+    }
+
+    pub(crate) fn delete_playlist(&mut self, id: i64) {
+        if let Some(db) = &self.db
+            && let Err(e) = db.delete_playlist(id)
+        {
+            eprintln!("could not delete the playlist: {e}");
+        }
+        self.reload();
+    }
+
+    pub(crate) fn set_playlist_tracks(&mut self, id: i64, tracks: &[i64]) {
+        if let Some(db) = &mut self.db
+            && let Err(e) = db.set_playlist_tracks(id, tracks)
+        {
+            eprintln!("could not change the playlist: {e}");
+        }
+        self.reload();
+    }
+
+    /// Save these files as a library playlist called `name`, adding any
+    /// the library lacks. Done on the worker; `saved` says when.
+    pub(crate) fn save_playlist(&mut self, name: String, paths: Vec<PathBuf>) {
+        let known = self.tracks.iter().map(|t| t.info.path.clone()).collect();
+        if self.send(Job::Save { name, paths, known }) {
+            self.busy = Some(Busy::Looking);
+        }
+    }
+
     /// Rate these tracks, 0 (none) to 5 stars.
     pub(crate) fn rate(&mut self, ids: &[i64], stars: u8) {
         let Some(db) = &self.db else { return };
@@ -340,6 +486,7 @@ impl App {
     /// Take in finished library work, and repaint if it shows.
     pub(super) fn poll_library(&mut self) {
         if self.library.poll() {
+            self.show_saved_playlist();
             self.request_redraw(PaneKind::Library);
         }
     }
@@ -374,6 +521,7 @@ impl App {
             eprintln!("could not watch {}: {e}", dir.display());
             return;
         }
+        self.library.watch_folders();
         self.library.rescan();
         self.show_library();
     }
@@ -384,6 +532,7 @@ impl App {
         {
             eprintln!("could not stop watching {}: {e}", dir.display());
         }
+        self.library.watch_folders();
         self.library.reload();
         self.request_redraw(PaneKind::Library);
     }
@@ -414,7 +563,7 @@ impl App {
         self.show_library();
     }
 
-    fn show_library(&mut self) {
+    pub(super) fn show_library(&mut self) {
         if !self.pane(PaneKind::Library).is_some_and(|p| p.visible) {
             self.toggle_library();
         }

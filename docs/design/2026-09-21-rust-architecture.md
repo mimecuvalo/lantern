@@ -95,6 +95,7 @@ Not pinned in this table, which would only rot.
 | Cue encodings | `encoding_rs`, `chardetng` | Shift-JIS/CP-1251/CP-1252 cue sheets (added M5), in `lantern-playlist`. |
 | Library store | `rusqlite`, feature `bundled` | The media library's tracks, history and playlists (added with the library). SQLite: crash-safe, incremental writes as a scan goes, and grows by migration. Bundled so every platform gets the same SQLite. **Rejected** a JSON file: rewriting tens of thousands of tracks for each play count. |
 | Library XML | `plist`, default features off | Reads Apple Music's and iTunes' library XML for import. |
+| Folder watching | `notify` | Notices changes in watched folders while the app runs (FSEvents on macOS, through the objc2 generation already built), so they are rescanned without being asked. |
 
 ## 5. Threading model
 

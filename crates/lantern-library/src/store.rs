@@ -19,7 +19,10 @@ pub struct Library {
     db: Connection,
 }
 
-/// A playlist kept in the library, such as one imported from Apple Music.
+/// Playlists made in Lantern are filed under this source.
+pub const OWN: &str = "lantern";
+
+/// A playlist kept in the library: made here, or imported from Apple Music.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Playlist {
     pub id: i64,
@@ -337,6 +340,62 @@ impl Library {
         Ok(lists)
     }
 
+    /// A new, empty playlist of Lantern's own, at the end; its id.
+    pub fn create_playlist(&self, name: &str) -> Result<i64> {
+        self.db.execute(
+            "INSERT INTO playlists (name, source) VALUES (?1, ?2)",
+            [name, OWN],
+        )?;
+        Ok(self.db.last_insert_rowid())
+    }
+
+    pub fn rename_playlist(&self, id: i64, name: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE playlists SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a playlist. Its tracks stay in the library.
+    pub fn delete_playlist(&self, id: i64) -> Result<()> {
+        self.db
+            .execute("DELETE FROM playlists WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Set a playlist's tracks, in order, replacing what it held.
+    pub fn set_playlist_tracks(&mut self, id: i64, tracks: &[i64]) -> Result<()> {
+        let tx = self.db.transaction()?;
+        tx.execute("DELETE FROM playlist_items WHERE playlist = ?1", [id])?;
+        {
+            let mut q = tx.prepare(
+                "INSERT INTO playlist_items (playlist, position, track) VALUES (?1, ?2, ?3)",
+            )?;
+            for (n, t) in tracks.iter().enumerate() {
+                q.execute(params![id, n as i64, t])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The ids of the tracks at these paths, where they are in the library,
+    /// in the paths' order.
+    pub fn ids_of(&self, paths: &[PathBuf]) -> Result<Vec<i64>> {
+        let mut q = self.db.prepare("SELECT id FROM tracks WHERE path = ?1")?;
+        let mut out = Vec::new();
+        for p in paths {
+            if let Some(id) = q
+                .query_row([path_text(p)], |r| r.get::<_, i64>(0))
+                .optional()?
+            {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     /// Replace every playlist from `source` with `lists`: each a name and
     /// the paths of its tracks, in order. Paths not in the library are left
     /// out.
@@ -434,6 +493,36 @@ mod tests {
         assert_eq!(lib.fingerprints().unwrap()[Path::new("/m/a.mp3")], (100, 5));
         lib.remove(&[PathBuf::from("/m/a.mp3")]).unwrap();
         assert!(lib.fingerprints().unwrap().is_empty());
+    }
+
+    #[test]
+    fn own_playlists_are_made_renamed_filled_and_deleted() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.upsert(&[info("/m/a.mp3", "A"), info("/m/b.mp3", "B")], 1)
+            .unwrap();
+        let ids = lib
+            .ids_of(&[
+                PathBuf::from("/m/b.mp3"),
+                PathBuf::from("/nowhere.mp3"),
+                PathBuf::from("/m/a.mp3"),
+            ])
+            .unwrap();
+        assert_eq!(ids.len(), 2, "the unknown path drops out");
+
+        let list = lib.create_playlist("Riot").unwrap();
+        lib.set_playlist_tracks(list, &ids).unwrap();
+        lib.rename_playlist(list, "Riot Grrrl").unwrap();
+        let lists = lib.playlists().unwrap();
+        assert_eq!(lists.len(), 1);
+        assert_eq!(
+            (lists[0].name.as_str(), lists[0].source.as_str()),
+            ("Riot Grrrl", OWN)
+        );
+        assert_eq!(lists[0].tracks, ids);
+
+        lib.delete_playlist(list).unwrap();
+        assert!(lib.playlists().unwrap().is_empty());
+        assert_eq!(lib.track_count().unwrap(), 2, "the tracks stay");
     }
 
     #[test]

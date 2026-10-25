@@ -39,6 +39,14 @@ pub const LIST_HSCROLL: WidgetId = WidgetId(311);
 pub const PLAY: WidgetId = WidgetId(312);
 pub const ENQUEUE: WidgetId = WidgetId(313);
 pub const DIVIDER: WidgetId = WidgetId(314);
+pub const ARTISTS: WidgetId = WidgetId(315);
+pub const ARTISTS_SCROLL: WidgetId = WidgetId(316);
+pub const ALBUMS: WidgetId = WidgetId(317);
+pub const ALBUMS_SCROLL: WidgetId = WidgetId(318);
+
+/// The filter panes' lists, Artist then Album, and their scrollbars.
+pub const FILTER_LISTS: [WidgetId; 2] = [ARTISTS, ALBUMS];
+pub const FILTER_SCROLLS: [WidgetId; 2] = [ARTISTS_SCROLL, ALBUMS_SCROLL];
 
 /// Smaller than this, the tree and the list have no room.
 pub const MIN_WIDTH: u32 = 375;
@@ -129,9 +137,30 @@ pub struct Layout {
     pub status: (i32, i32),
     /// Between the tree and the list, the full height: it drags.
     pub divider: Rect,
+    /// The Artist and Album panes above the list, where the view has them
+    /// and the window has room.
+    pub filters: Option<FilterPanes>,
 }
 
-pub fn layout(width: u32, height: u32, tree_width: u32) -> Layout {
+/// The two filter panes, Artist then Album: each a header, a list and a
+/// scrollbar beside both.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FilterPanes {
+    pub heads: [Rect; 2],
+    pub lists: [Rect; 2],
+    pub scrolls: [Rect; 2],
+}
+
+/// The filter panes take this share of the height, in whole rows, but no
+/// fewer than this many rows.
+const FILTER_SHARE: f32 = 0.35;
+const MIN_FILTER_ROWS: u32 = 4;
+/// The fewest track rows the panes leave below them.
+const MIN_LIST_ROWS: u32 = 5;
+
+/// The window's layout. `filters`: the view has Artist and Album panes,
+/// which show if there is room for them.
+pub fn layout(width: u32, height: u32, tree_width: u32, filters: bool) -> Layout {
     let tree_width = clamp_tree_width(width, tree_width);
     let c = content_area(width, height);
     let bottom = c.y + c.h as i32 - BUTTON_HEIGHT as i32;
@@ -145,8 +174,41 @@ pub fn layout(width: u32, height: u32, tree_width: u32) -> Layout {
     let clear = Rect::new(rx + rw as i32 - 72, c.y, 72, BUTTON_HEIGHT);
     let search_x = rx + 46;
     let search = Rect::new(search_x, c.y + 1, (clear.x - 5 - search_x) as u32, 13);
-    // The list and its header share a sunken box with both scrollbars.
-    let header = Rect::new(rx + 1, c.y + 21, rw - 2 - ARROW, HEADER_HEIGHT);
+    // The filter panes, if any, then the list: it and its header share a
+    // sunken box with both scrollbars.
+    let top = c.y + 21;
+    let room = bottom - 5 - ARROW as i32 - top;
+    let fixed = |rows: u32| (HEADER_HEIGHT + rows * ROW_HEIGHT) as i32;
+    let pane_rows =
+        ((room as f32 * FILTER_SHARE) as i32 - HEADER_HEIGHT as i32).max(0) as u32 / ROW_HEIGHT;
+    let pane_rows = pane_rows.max(MIN_FILTER_ROWS);
+    let fits = room >= fixed(pane_rows) + 7 + fixed(MIN_LIST_ROWS);
+    let filters = (filters && fits).then(|| {
+        let inner = rw - 2;
+        let pane_w = (inner - GAP as u32 - 2) / 2;
+        let at = |i: i32| rx + 1 + i * (pane_w as i32 + GAP + 2);
+        let rows_h = pane_rows * ROW_HEIGHT;
+        let head = |i| Rect::new(at(i), top, pane_w - ARROW, HEADER_HEIGHT);
+        let list = |i| Rect::new(at(i), top + HEADER_HEIGHT as i32, pane_w - ARROW, rows_h);
+        let scroll = |i| {
+            Rect::new(
+                at(i) + (pane_w - ARROW) as i32,
+                top,
+                ARROW,
+                HEADER_HEIGHT + rows_h,
+            )
+        };
+        FilterPanes {
+            heads: [head(0), head(1)],
+            lists: [list(0), list(1)],
+            scrolls: [scroll(0), scroll(1)],
+        }
+    });
+    let header_y = match filters {
+        Some(f) => f.lists[0].y + f.lists[0].h as i32 + 7,
+        None => top,
+    };
+    let header = Rect::new(rx + 1, header_y, rw - 2 - ARROW, HEADER_HEIGHT);
     let list_y = header.y + HEADER_HEIGHT as i32;
     let list_h = (bottom - 5 - ARROW as i32 - list_y).max(0) as u32;
     let list = Rect::new(header.x, list_y, header.w, list_h);
@@ -170,12 +232,13 @@ pub fn layout(width: u32, height: u32, tree_width: u32) -> Layout {
         enqueue: Rect::new(rx + 51, bottom, 55, BUTTON_HEIGHT),
         status: (rx + 113, bottom + 11),
         divider: Rect::new(c.x + tree_width as i32 + 1, c.y, (GAP - 1) as u32, c.h),
+        filters,
     }
 }
 
 /// Whole rows that fit in the tree, and in the list.
-pub fn visible_rows(width: u32, height: u32, tree_width: u32) -> (usize, usize) {
-    let l = layout(width, height, tree_width);
+pub fn visible_rows(width: u32, height: u32, tree_width: u32, filters: bool) -> (usize, usize) {
+    let l = layout(width, height, tree_width, filters);
     (
         (l.tree.h / ROW_HEIGHT) as usize,
         (l.list.h / ROW_HEIGHT) as usize,
@@ -199,13 +262,13 @@ const TITLE_PAD: (i32, i32) = (8, 7);
 /// The title's letters sit this far down the bar.
 const TITLE_Y: i32 = 4;
 
-pub fn widgets(width: u32, height: u32, tree_width: u32) -> Vec<Widget> {
+pub fn widgets(width: u32, height: u32, tree_width: u32, filters: bool) -> Vec<Widget> {
     let w = |id, x, y, width, height, kind| Widget::new(id, Rect::new(x, y, width, height), kind);
     let at = |id, r: Rect, kind| Widget::new(id, r, kind);
     let (wi, hi) = (width as i32, height as i32);
-    let l = layout(width, height, tree_width);
+    let l = layout(width, height, tree_width, filters);
     use WidgetKind::{Button, HitZone, Slider};
-    vec![
+    let mut v = vec![
         w(TITLE_DRAG, 0, 0, width, TOP, HitZone),
         w(CLOSE, wi - 11, 3, 9, 9, Button),
         at(TREE, l.tree, HitZone),
@@ -222,9 +285,16 @@ pub fn widgets(width: u32, height: u32, tree_width: u32) -> Vec<Widget> {
         at(LIST_HSCROLL, l.list_hscroll, Slider),
         at(PLAY, l.play, Button),
         at(ENQUEUE, l.enqueue, Button),
-        // Last, so it wins where it overlaps the frame's corner.
-        w(RESIZE, wi - 20, hi - 20, 20, 20, Slider),
-    ]
+    ];
+    if let Some(f) = l.filters {
+        for i in 0..2 {
+            v.push(at(FILTER_LISTS[i], f.lists[i], HitZone));
+            v.push(at(FILTER_SCROLLS[i], f.scrolls[i], Slider));
+        }
+    }
+    // Last, so it wins where it overlaps the frame's corner.
+    v.push(w(RESIZE, wi - 20, hi - 20, 20, 20, Slider));
+    v
 }
 
 /// Where the window's contents go: inside the frame.
@@ -245,6 +315,8 @@ pub struct TreeRow {
     /// `Some(open)` for a row with children.
     pub expander: Option<bool>,
     pub selected: bool,
+    /// Being renamed: the caret's place in `label`, in chars.
+    pub editing: Option<usize>,
 }
 
 /// One line of the list: its cells, in the order the columns show.
@@ -252,6 +324,23 @@ pub struct TreeRow {
 pub struct ListRow {
     pub cells: Vec<String>,
     pub selected: bool,
+}
+
+/// One line of a filter pane: an artist or album, or the "All" line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterRow {
+    pub label: String,
+    /// Its tracks.
+    pub count: usize,
+    pub selected: bool,
+}
+
+/// What the filter panes show, Artist then Album.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterView {
+    /// The rows in view of each pane, top first.
+    pub rows: [Vec<FilterRow>; 2],
+    pub scrolls: [ScrollState; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +368,8 @@ pub struct LibraryView {
     /// While a header is dragged: where it would land, as an x in the
     /// window.
     pub column_drop: Option<i32>,
+    /// The Artist and Album panes, for a view that has them.
+    pub filters: Option<FilterView>,
     /// What the list holds, or what the library is busy with.
     pub status: String,
 }
@@ -344,6 +435,37 @@ fn clip(dst: &mut Surface<'_>, r: Rect, scale: u32) {
     dst.set_clip(Some(c), scale);
 }
 
+/// A list header's cell: its background, lit top and left, shaded bottom
+/// and right.
+fn header_cell(dst: &mut Surface<'_>, colours: &lantern_skin::GenExColors, cell: Rect, scale: u32) {
+    let bg = rgb(colours.list_header_background);
+    blit::fill_rect(dst, cell.x, cell.y, cell.w, cell.h, bg, scale);
+    let (tl, br) = (
+        rgb(colours.list_header_frame_top_left),
+        rgb(colours.list_header_frame_bottom_right),
+    );
+    blit::fill_rect(dst, cell.x, cell.y, cell.w, 1, tl, scale);
+    blit::fill_rect(dst, cell.x, cell.y, 1, cell.h, tl, scale);
+    blit::fill_rect(
+        dst,
+        cell.x,
+        cell.y + cell.h as i32 - 1,
+        cell.w,
+        1,
+        br,
+        scale,
+    );
+    blit::fill_rect(
+        dst,
+        cell.x + cell.w as i32 - 1,
+        cell.y,
+        1,
+        cell.h,
+        br,
+        scale,
+    );
+}
+
 pub fn draw(
     dst: &mut Surface<'_>,
     skin: Option<&Skin>,
@@ -365,7 +487,12 @@ pub fn draw(
         rgb(colours.window_background),
         scale,
     );
-    let l = layout(view.width, view.height, view.tree_width);
+    let l = layout(
+        view.width,
+        view.height,
+        view.tree_width,
+        view.filters.is_some(),
+    );
     let pressed = |id| widgets.iter().any(|x| x.id == id && x.pressed);
     let item_bg = rgb(colours.item_background);
     let item_fg = rgb(colours.item_foreground);
@@ -394,7 +521,21 @@ pub fn draw(
                 (r.x + r.w as i32 - x - 8).max(0) as u32,
                 ROW_HEIGHT,
             );
-            text_in(dst, font, &row.label, text, fg, (false, false), scale);
+            match row.editing {
+                // A field over the row while it is renamed.
+                Some(caret) => {
+                    blit::fill_rect(dst, text.x, y, text.w, ROW_HEIGHT, item_bg, scale);
+                    let field = Rect::new(text.x, y + 1, text.w, ROW_HEIGHT - 2);
+                    gc::sunken(dst, &colours, field, scale);
+                    text_in(dst, font, &row.label, text, item_fg, (false, false), scale);
+                    let before: String = row.label.chars().take(caret).collect();
+                    let s = scale as f32;
+                    let cx = ((text.x as f32 + 2.0) * s + font.width(&before, style(scale))) / s;
+                    let caret_x = cx.round() as i32;
+                    blit::fill_rect(dst, caret_x, y + 2, 1, ROW_HEIGHT - 4, item_fg, scale);
+                }
+                None => text_in(dst, font, &row.label, text, fg, (false, false), scale),
+            }
         }
     }
     dst.set_clip(None, scale);
@@ -437,9 +578,46 @@ pub fn draw(
         dst.set_clip(None, scale);
     }
 
+    if let (Some(panes), Some(fv)) = (l.filters, &view.filters) {
+        for i in 0..2 {
+            let (head, list) = (panes.heads[i], panes.lists[i]);
+            gc::sunken(
+                dst,
+                &colours,
+                Rect::new(head.x, head.y, head.w + ARROW, head.h + list.h),
+                scale,
+            );
+            header_cell(dst, &colours, head, scale);
+            blit::fill_rect(dst, list.x, list.y, list.w, list.h, item_bg, scale);
+            let head_fg = rgb(colours.list_header_text);
+            if let Some(font) = font {
+                let label = ["Artist", "Album"][i];
+                text_in(dst, font, label, head, head_fg, (false, false), scale);
+                text_in(dst, font, "Tracks", head, head_fg, (true, false), scale);
+            }
+            clip(dst, list, scale);
+            for (n, row) in fv.rows[i].iter().enumerate() {
+                let y = list.y + (n as u32 * ROW_HEIGHT) as i32;
+                let fg = if row.selected { sel_fg } else { item_fg };
+                if row.selected {
+                    blit::fill_rect(dst, list.x, y, list.w, ROW_HEIGHT, sel_bg, scale);
+                }
+                if let Some(font) = font {
+                    let at = Rect::new(list.x, y, list.w, ROW_HEIGHT);
+                    let count = row.count.to_string();
+                    let count_w = (font.width(&count, style(scale)) / scale as f32) as u32 + 6;
+                    let name = Rect::new(list.x, y, list.w.saturating_sub(count_w), ROW_HEIGHT);
+                    text_in(dst, font, &row.label, name, fg, (false, false), scale);
+                    text_in(dst, font, &count, at, fg, (true, false), scale);
+                }
+            }
+            dst.set_clip(None, scale);
+            gc::scrollbar(dst, skin, panes.scrolls[i], true, &fv.scrolls[i], scale);
+        }
+    }
+
     // The list: header, then rows, both scrolled sideways together.
     let h = l.header;
-    let head_bg = rgb(colours.list_header_background);
     blit::fill_rect(
         dst,
         h.x,
@@ -462,31 +640,7 @@ pub fn draw(
     for &(index, width) in &view.columns {
         let (column, _, label, ..) = ALL_COLUMNS[index];
         let cell = Rect::new(x, h.y, width, h.h);
-        blit::fill_rect(dst, cell.x, cell.y, cell.w, cell.h, head_bg, scale);
-        let (tl, br) = (
-            rgb(colours.list_header_frame_top_left),
-            rgb(colours.list_header_frame_bottom_right),
-        );
-        blit::fill_rect(dst, cell.x, cell.y, cell.w, 1, tl, scale);
-        blit::fill_rect(dst, cell.x, cell.y, 1, cell.h, tl, scale);
-        blit::fill_rect(
-            dst,
-            cell.x,
-            cell.y + cell.h as i32 - 1,
-            cell.w,
-            1,
-            br,
-            scale,
-        );
-        blit::fill_rect(
-            dst,
-            cell.x + cell.w as i32 - 1,
-            cell.y,
-            1,
-            cell.h,
-            br,
-            scale,
-        );
+        header_cell(dst, &colours, cell, scale);
         let head_fg = rgb(colours.list_header_text);
         let mut text = cell;
         if let Some(sort) = view.sort.filter(|s| s.column == column) {
@@ -753,7 +907,7 @@ mod tests {
     #[test]
     fn widgets_stay_inside_the_window() {
         for (w, h) in [(MIN_WIDTH, MIN_HEIGHT), (500, 348)] {
-            for x in widgets(w, h, DEFAULT_TREE_WIDTH) {
+            for x in widgets(w, h, DEFAULT_TREE_WIDTH, true) {
                 assert!(
                     x.rect.x >= 0
                         && x.rect.y >= 0
@@ -770,7 +924,7 @@ mod tests {
     fn layout_fits_inside_the_frame_at_every_size() {
         for (w, h) in [(MIN_WIDTH, MIN_HEIGHT), (500, 348), (900, 667)] {
             let c = content_area(w, h);
-            let l = layout(w, h, DEFAULT_TREE_WIDTH);
+            let l = layout(w, h, DEFAULT_TREE_WIDTH, true);
             for r in [
                 l.tree,
                 l.tree_scroll,
@@ -795,10 +949,32 @@ mod tests {
             }
             assert!(l.search.w > 40, "room to type at {w}x{h}");
             assert!(
-                visible_rows(w, h, DEFAULT_TREE_WIDTH).1 >= 5,
+                visible_rows(w, h, DEFAULT_TREE_WIDTH, true).1 >= 5,
                 "a list at {w}x{h}"
             );
         }
+    }
+
+    #[test]
+    fn filter_panes_show_only_with_room() {
+        assert!(
+            layout(MIN_WIDTH, MIN_HEIGHT, DEFAULT_TREE_WIDTH, true)
+                .filters
+                .is_none()
+        );
+        let l = layout(500, 348, DEFAULT_TREE_WIDTH, true);
+        let f = l.filters.expect("room at the default size");
+        assert!(f.lists[0].h >= MIN_FILTER_ROWS * ROW_HEIGHT);
+        assert!(f.lists[0].x + (f.lists[0].w + ARROW) as i32 <= f.lists[1].x);
+        assert!(
+            f.lists[0].y + (f.lists[0].h as i32) < l.header.y,
+            "the list below"
+        );
+        assert!(
+            layout(500, 348, DEFAULT_TREE_WIDTH, false)
+                .filters
+                .is_none()
+        );
     }
 
     #[test]

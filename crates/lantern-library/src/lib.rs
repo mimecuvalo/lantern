@@ -4,7 +4,8 @@
 //! ([`scan`], [`tags`]), and from an Apple Music library ([`import`]). They
 //! are kept in SQLite ([`Library`]), with what Winamp's library kept beside
 //! them: when each was added, how often and when it was last played, and its
-//! rating. [`view`] holds the library's standing views — Most Played,
+//! rating. [`watch`] notices changes in the watched folders while the app
+//! runs. [`view`] holds the library's standing views — Most Played,
 //! Recently Added and the rest — and its search.
 //!
 //! No UI and no audio here: the app drives a scan on a thread of its own and
@@ -15,10 +16,11 @@ pub mod scan;
 mod store;
 pub mod tags;
 pub mod view;
+pub mod watch;
 
 use std::path::PathBuf;
 
-pub use store::{Library, Playlist};
+pub use store::{Library, OWN, Playlist};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {

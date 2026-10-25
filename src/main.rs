@@ -354,13 +354,18 @@ mod window_render_tests {
             depth,
             expander,
             selected,
+            editing: None,
         };
         let tree = vec![
             tree_row("Local Media", 0, Some(true), false),
             tree_row("Audio", 1, None, true),
             tree_row("Most Played", 1, None, false),
             tree_row("Recently Added", 1, None, false),
-            tree_row("Playlists", 0, Some(false), false),
+            tree_row("Playlists", 0, Some(true), false),
+            TreeRow {
+                editing: Some(5),
+                ..tree_row("Riot Grrrl", 1, None, false)
+            },
         ];
         let rows: Vec<ListRow> = (1..=30)
             .map(|n| ListRow {
@@ -389,7 +394,30 @@ mod window_render_tests {
             for (w, h, focused) in [(500, 348, true), (min_w, min_h, false), (650, 464, false)] {
                 let mut px = vec![0u32; (w * h) as usize];
                 let tree_width = library_window::DEFAULT_TREE_WIDTH;
-                let shown = library_window::visible_rows(w, h, tree_width).1;
+                let shown = library_window::visible_rows(w, h, tree_width, true).1;
+                let filter_row = |label: &str, count, selected| library_window::FilterRow {
+                    label: label.into(),
+                    count,
+                    selected,
+                };
+                let filters = library_window::layout(w, h, tree_width, true)
+                    .filters
+                    .map(|_| library_window::FilterView {
+                        rows: [
+                            vec![
+                                filter_row("All (3 artists)", 30, false),
+                                filter_row("Bikini Kill", 4, false),
+                                filter_row("Sleater-Kinney", 25, true),
+                                filter_row("(Unknown Artist)", 1, false),
+                            ],
+                            vec![
+                                filter_row("All (2 albums)", 25, true),
+                                filter_row("Dig Me Out", 12, false),
+                                filter_row("The Hot Rock", 13, false),
+                            ],
+                        ],
+                        scrolls: [scroll(0.0, 1.0), scroll(0.0, 1.0)],
+                    });
                 let view = LibraryView {
                     focused,
                     width: w,
@@ -409,6 +437,7 @@ mod window_render_tests {
                     columns: library_window::default_columns(),
                     tree_width,
                     column_drop: None,
+                    filters,
                     status: "1,234 items [3:24:11]".into(),
                 };
                 let font = ui::font::TextFont::load(&skin.playlist_style.font);
@@ -417,7 +446,7 @@ mod window_render_tests {
                     Some(&skin),
                     font.as_ref(),
                     &view,
-                    &library_window::widgets(w, h, tree_width),
+                    &library_window::widgets(w, h, tree_width, true),
                     1,
                 );
                 // Nothing is left unpainted: frame and contents cover it all.

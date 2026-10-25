@@ -22,6 +22,7 @@ mod playlist;
 pub mod settings;
 mod snap;
 mod tags;
+mod text_edit;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -735,7 +736,7 @@ impl App {
             PaneKind::Main => layout::main_window(),
             PaneKind::Equalizer => eq_window::widgets(),
             PaneKind::Playlist => playlist_window::widgets(w, h),
-            PaneKind::Library => library_window::widgets(w, h, self.lib_ui.tree_width),
+            PaneKind::Library => self.library_widgets(),
         };
         // Colour-managed without a per-frame conversion; see the notes.
         #[cfg(target_os = "macos")]

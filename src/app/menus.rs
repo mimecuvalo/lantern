@@ -28,6 +28,8 @@ pub(crate) enum MenuKind {
     LibraryTracks,
     /// Over its column headers.
     LibraryColumns,
+    /// Over its tree.
+    LibraryTree,
 }
 
 /// The Winamp Skin Museum: tens of thousands of classic skins, each a
@@ -58,14 +60,18 @@ const UNWATCH: &str = "lib_unwatch:";
 const RATE: &str = "lib_rate:";
 /// Menu ids for showing or hiding a library column: this, then its index.
 const COLUMN: &str = "lib_column:";
+/// Menu ids for sending tracks to a library playlist: this, then its id.
+const SEND: &str = "lib_send:";
 
 /// The library's own items, in the menu bar and its window's menu.
-fn library_items() -> [MenuItem; 4] {
+fn library_items() -> [MenuItem; 6] {
     [
         item("lib_add_folder", "Add Folder to Library…"),
         item("lib_rescan", "Rescan Watched Folders"),
         item("lib_import_music", "Import Apple Music Library"),
         item("lib_import_xml", "Import Library XML File…"),
+        item("lib_new_playlist", "New Playlist"),
+        item("lib_save_playlist", "Save Playlist to Library"),
     ]
 }
 
@@ -175,8 +181,8 @@ impl App {
                 ])?;
             }
             MenuKind::Library => {
-                let [add, rescan, music, xml] = library_items();
-                menu.append_items(&[&add, &rescan, &sep(), &music, &xml])?;
+                let [add, rescan, music, xml, new, save] = library_items();
+                menu.append_items(&[&add, &rescan, &sep(), &music, &xml, &sep(), &new, &save])?;
                 let folders = self.library.folders();
                 if !folders.is_empty() {
                     let unwatch = Submenu::new("Stop Watching", true);
@@ -194,15 +200,47 @@ impl App {
                     rate.append(&item(&format!("{RATE}{stars}"), &label))?;
                 }
                 rate.append_items(&[&sep(), &item(&format!("{RATE}0"), "No Rating")])?;
+                // Lantern's own playlists, which can take more tracks.
+                let send = Submenu::new("Send to Playlist", true);
+                for p in self
+                    .library
+                    .playlists
+                    .iter()
+                    .filter(|p| p.source == lantern_library::OWN)
+                {
+                    send.append(&item(&format!("{SEND}{}", p.id), &p.name))?;
+                }
+                send.append_items(&[&sep(), &item("lib_send_new", "New Playlist")])?;
                 menu.append_items(&[
                     &item("lib_play", "Play Selection"),
                     &item("lib_enqueue", "Enqueue Selection"),
                     &sep(),
+                    &send,
                     &rate,
                     &sep(),
+                ])?;
+                if self.own_playlist_shown().is_some() {
+                    menu.append(&item("lib_unlist", "Remove from Playlist"))?;
+                }
+                menu.append_items(&[
                     &item("lib_reveal", "Show in Finder"),
                     &item("lib_forget", "Remove from Library"),
                 ])?;
+            }
+            MenuKind::LibraryTree => {
+                menu.append(&item("lib_new_playlist", "New Playlist"))?;
+                if let Some(id) = self.playlist_selected_in_tree() {
+                    menu.append_items(&[
+                        &sep(),
+                        &item("lib_list_play", "Play"),
+                        &item("lib_list_enqueue", "Enqueue"),
+                        &sep(),
+                    ])?;
+                    if self.library.is_own(id) {
+                        menu.append(&item("lib_list_rename", "Rename"))?;
+                    }
+                    menu.append(&item("lib_list_delete", "Delete"))?;
+                }
             }
             MenuKind::LibraryColumns => {
                 use crate::ui::library_window::ALL_COLUMNS;
@@ -223,6 +261,7 @@ impl App {
                     &sep(),
                     &item("load_list", "Load Playlist…"),
                     &item("save_list", "Save Playlist…"),
+                    &item("lib_save_playlist", "Save to Library Playlist"),
                 ])?;
             }
         }
@@ -286,6 +325,11 @@ impl App {
             self.toggle_library_column(i);
             return;
         }
+        if let Some(list) = id.strip_prefix(SEND).and_then(|s| s.parse().ok()) {
+            self.send_selection_to_playlist(list);
+            return;
+        }
+        let shown = self.playlist_selected_in_tree();
         match id {
             "play_files" => self.eject(),
             "play_folder" => {
@@ -325,6 +369,28 @@ impl App {
             "lib_reveal" => self.reveal_library_selection(),
             "lib_forget" => self.remove_library_selection(),
             "lib_columns_reset" => self.reset_library_columns(),
+            "lib_new_playlist" => {
+                self.show_library();
+                self.new_library_playlist(&[]);
+            }
+            "lib_save_playlist" => self.save_playlist_to_library(),
+            "lib_send_new" => self.send_selection_to_new_playlist(),
+            "lib_unlist" => self.remove_selection_from_playlist(),
+            "lib_list_play" | "lib_list_enqueue" => {
+                if let Some(list) = shown {
+                    self.send_library_playlist(list, id == "lib_list_play");
+                }
+            }
+            "lib_list_rename" => {
+                if let Some(list) = shown {
+                    self.start_rename(list);
+                }
+            }
+            "lib_list_delete" => {
+                if let Some(list) = shown {
+                    self.delete_library_playlist(list);
+                }
+            }
             "about" => {
                 rfd::MessageDialog::new()
                     .set_title("About Lantern")
@@ -475,9 +541,12 @@ impl App {
             );
             let show = keyed("show_lib", "Media Library", "Alt+L");
             let window = Submenu::with_items("Window", true, &[&aot, &show])?;
-            let [add, rescan, music, xml] = library_items();
-            let library =
-                Submenu::with_items("Library", true, &[&add, &rescan, &sep(), &music, &xml])?;
+            let [add, rescan, music, xml, new, save] = library_items();
+            let library = Submenu::with_items(
+                "Library",
+                true,
+                &[&add, &rescan, &sep(), &music, &xml, &sep(), &new, &save],
+            )?;
             bar.append_items(&[&app, &file, &library, &window])?;
             Ok((bar, aot))
         };

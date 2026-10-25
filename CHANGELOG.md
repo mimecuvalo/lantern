@@ -33,7 +33,14 @@ the project, kept here because the git history itself was then cleared.
   headers resize from their edges and move by dragging; right-click a
   header to show or hide columns (Date Added, Bitrate and File too), or a
   track to play, enqueue, rate, show in Finder or remove it from the
-  library. The layout is remembered.
+  library. The layout is remembered. The Audio view has Winamp's Artist and
+  Album filter panes above the list, narrowing it as you pick, and following
+  the search. Watched folders are watched while Lantern runs: music added,
+  changed or removed there shows up within seconds. Playlists can be made
+  in the library — New Playlist, Send to Playlist on the selected tracks,
+  dragging tracks onto a playlist in the tree, or Save to Library Playlist
+  from the playlist window — renamed in place, played, enqueued, trimmed
+  and deleted. Imported Apple Music playlists can be played and deleted.
 - **`scripts/bundle-app.sh`** builds Lantern into `Lantern.app` and can
   launch it. Importing straight from Apple Music needs Lantern running as an
   app; run from a terminal, the import now says so.

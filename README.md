@@ -68,7 +68,10 @@ Apple Music library — its local songs, play counts, ratings and playlists.
 Pick a view or playlist in the tree, type to search, click a column header
 to sort, and double-click (or Play) to play; Enqueue adds to the playlist.
 Drag tracks onto the playlist to put them exactly there. Right-click a track
-to rate it, a column header to choose columns. Importing straight from
+to rate it or send it to a playlist, a column header to choose columns, the
+tree to make, rename or delete playlists. Pick an artist or album in the
+panes above the Audio view to narrow it. Changes in watched folders show up
+on their own. Importing straight from
 Apple Music works only with Lantern running as an app, not from `cargo run`;
 build and launch one with:
 

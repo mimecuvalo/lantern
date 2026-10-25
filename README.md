@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="macos/AppIcon.png" width="128" height="128" alt="Lantern's icon: a pixel-art lantern, lit, in a starry night sky">
+</p>
+
 # Lantern
 
 A native, Winamp 2.x-compatible music player for macOS, written in Rust.

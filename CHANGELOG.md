@@ -12,6 +12,10 @@ the project, kept here because the git history itself was then cleared.
 
 ### Added
 
+- **An app icon**: a pixel-art hurricane lantern, lit, in Night's starry
+  sky, its glass rim-lit like Night's controls. Original art, drawn in code
+  (`cargo run -p lantern-skin --example make_icon`) into
+  `macos/AppIcon.icns`, which `scripts/bundle-app.sh` puts in Lantern.app.
 - **Jump to File**, Winamp's J (also in the main menu's Playback submenu):
   type a few words and the playlist narrows to the entries that match;
   Up and Down pick one, Enter or a double-click plays it.

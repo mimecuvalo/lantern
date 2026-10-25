@@ -11,6 +11,9 @@
 	<string>Lantern</string>
 	<key>CFBundleExecutable</key>
 	<string>lantern</string>
+	<!-- Drawn by `cargo run -p lantern-skin --example make_icon`. -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -8,7 +8,162 @@
 use lantern_skin::{GenExColors, Rect as SheetRect, Skin, SpriteKey};
 
 use super::blit::{self, Surface};
+use super::font::{TextFont, TextStyle};
 use super::geometry::Rect;
+
+/// Text in generic windows: the playlist's font at its size.
+const FONT_PX: f32 = 9.0;
+const LETTER_SPACING: f32 = 0.5;
+
+pub fn style(scale: u32) -> TextStyle {
+    let s = scale as f32;
+    TextStyle {
+        px: FONT_PX * s,
+        spacing: LETTER_SPACING * s,
+    }
+}
+
+/// Text in `font`, cut to fit `r` and set on its middle; right-aligned
+/// within it if `right`, centred if `centre`.
+#[allow(clippy::too_many_arguments)]
+pub fn text_in(
+    dst: &mut Surface<'_>,
+    font: &TextFont,
+    text: &str,
+    r: Rect,
+    colour: u32,
+    (right, centre): (bool, bool),
+    scale: u32,
+) {
+    let s = scale as f32;
+    let st = style(scale);
+    let pad = 2.0 * s;
+    let room = r.w as f32 * s - 2.0 * pad;
+    if room <= 0.0 {
+        return;
+    }
+    let fitted = font.fit(text, st, room);
+    let w = font.width(&fitted, st);
+    let left = r.x as f32 * s;
+    let x = if centre {
+        left + (r.w as f32 * s - w) / 2.0
+    } else if right {
+        left + r.w as f32 * s - pad - w
+    } else {
+        left + pad
+    };
+    let baseline = (r.y + (r.h as i32 + 7) / 2) * scale as i32;
+    font.draw(dst, &fitted, (x, baseline), st, colour);
+}
+
+/// Confine drawing to `r`, in window pixels.
+pub fn clip(dst: &mut Surface<'_>, r: Rect, scale: u32) {
+    let c = lantern_skin::Rect::new(r.x.max(0) as u32, r.y.max(0) as u32, r.w, r.h);
+    dst.set_clip(Some(c), scale);
+}
+
+/// A one-line text field: sunken, its text, a selection behind it, the
+/// stretch an input method is composing underlined, and the caret if it
+/// has the keyboard. Positions are in chars.
+pub struct Field<'a> {
+    pub text: &'a str,
+    pub caret: Option<usize>,
+    pub selection: Option<(usize, usize)>,
+    pub marked: Option<(usize, usize)>,
+}
+
+pub fn field(
+    dst: &mut Surface<'_>,
+    font: &TextFont,
+    colours: &GenExColors,
+    r: Rect,
+    f: &Field<'_>,
+    scale: u32,
+) {
+    let (bg, fg) = (rgb(colours.item_background), rgb(colours.item_foreground));
+    let (sel_bg, sel_fg) = (
+        rgb(colours.list_background_selected),
+        rgb(colours.list_text_selected),
+    );
+    blit::fill_rect(dst, r.x, r.y, r.w, r.h, bg, scale);
+    sunken(dst, colours, r, scale);
+    clip(dst, r, scale);
+    // Where the n-th character starts, in window pixels.
+    let s = scale as f32;
+    let x_at = |n: usize| {
+        let before: String = f.text.chars().take(n).collect();
+        (((r.x as f32 + 2.0) * s + font.width(&before, style(scale))) / s).round() as i32
+    };
+    if let Some((a, b)) = f.selection {
+        let (xa, xb) = (x_at(a), x_at(b));
+        blit::fill_rect(
+            dst,
+            xa,
+            r.y + 1,
+            (xb - xa).max(0) as u32,
+            r.h - 2,
+            sel_bg,
+            scale,
+        );
+    }
+    text_in(dst, font, f.text, r, fg, (false, false), scale);
+    // The selected stretch again, in the selection's own text colour.
+    if let Some((a, b)) = f.selection {
+        let (xa, xb) = (x_at(a).max(r.x), x_at(b).min(r.x + r.w as i32));
+        if xb > xa {
+            clip(dst, Rect::new(xa, r.y, (xb - xa) as u32, r.h), scale);
+            text_in(dst, font, f.text, r, sel_fg, (false, false), scale);
+            clip(dst, r, scale);
+        }
+    }
+    if let Some((a, b)) = f.marked {
+        let (xa, xb) = (x_at(a), x_at(b));
+        blit::fill_rect(
+            dst,
+            xa,
+            r.y + r.h as i32 - 3,
+            (xb - xa).max(1) as u32,
+            1,
+            fg,
+            scale,
+        );
+    }
+    if let Some(caret) = f.caret {
+        blit::fill_rect(dst, x_at(caret), r.y + 2, 1, r.h - 4, fg, scale);
+    }
+    dst.set_clip(None, scale);
+}
+
+/// Which character a click `local_x` pixels into a field lands before.
+pub fn caret_at(font: &TextFont, text: &str, local_x: i32) -> usize {
+    let st = style(1);
+    // Before the first character whose middle is past the pointer.
+    let chars: Vec<char> = text.chars().collect();
+    let width = |n: usize| font.width(&chars[..n].iter().collect::<String>(), st);
+    (0..chars.len())
+        .find(|&n| (local_x as f32) < (width(n) + width(n + 1)) / 2.0)
+        .unwrap_or(chars.len())
+}
+
+/// A push button with `label` on it, nudged down a pixel while pressed.
+#[allow(clippy::too_many_arguments)]
+pub fn labelled_button(
+    dst: &mut Surface<'_>,
+    skin: &Skin,
+    font: Option<&TextFont>,
+    r: Rect,
+    label: &str,
+    pressed: bool,
+    scale: u32,
+) {
+    button(dst, skin, r, pressed, scale);
+    if let Some(font) = font {
+        let nudge = i32::from(pressed);
+        let at = Rect::new(r.x + nudge, r.y + nudge, r.w, r.h);
+        let colour = rgb(skin.genex_colors().button_text);
+        text_in(dst, font, label, at, colour, (false, true), scale);
+    }
+}
 
 /// Kept whole at each end of a stretched sprite.
 const END: u32 = 4;

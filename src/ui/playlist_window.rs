@@ -280,6 +280,9 @@ pub struct PlaylistView {
     /// The playing track's time, blank when stopped.
     pub mini_time: String,
     pub menu: Option<OpenMenu>,
+    /// While tracks are dragged over it: the line in view they would go in
+    /// before (0 is above the first row shown).
+    pub drop_line: Option<usize>,
 }
 
 pub fn draw(
@@ -424,6 +427,11 @@ fn draw_list(
         let room = right - duration_w - left - 4.0 * s;
         let text = font.fit(&format!("{}. {}", row.number, row.title), text_style, room);
         font.draw(dst, &text, (left, baseline), text_style, colour);
+    }
+    if let Some(n) = view.drop_line {
+        // A line between rows, in the playing track's colour.
+        let y = list.y + (n as u32 * ROW_HEIGHT) as i32 - 1;
+        blit::fill_rect(dst, list.x, y, list.w, 2, rgb(style.current), scale);
     }
     dst.set_clip(None, scale);
 }

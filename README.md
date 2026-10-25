@@ -45,6 +45,7 @@ classic Winamp skin too: Get More Skins… in the menu opens
   edges; the main window carries every window attached to it. Double-click a
   title bar for windowshade mode.
 - Keys: `Z X C V B` previous / play / pause / stop / next, `L` open files,
+  `J` jump to a file in the playlist, `I` (or `⌥3`) file info,
   arrows seek and change volume, `Ctrl-A` always on top, `⌘Q` quit. In the
   playlist, `Enter` plays, `Delete` removes, `⌘A` selects all.
 - The playlist's ADD / REM / SEL / MISC / LIST buttons open their menus; click

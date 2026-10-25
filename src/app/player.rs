@@ -289,6 +289,10 @@ impl App {
                 "v" => self.send(Command::Stop),
                 // Winamp's L opens files, as eject does.
                 "l" => self.eject(),
+                // And J jumps to a file in the playlist. I, for File Info,
+                // is Lantern's own: Winamp's is Alt+3, which works too.
+                "j" => self.open_jump(),
+                "i" => self.show_file_info(),
                 _ => {}
             },
             Key::Named(NamedKey::ArrowLeft) => self.seek_by(-SEEK_STEP_SECS),

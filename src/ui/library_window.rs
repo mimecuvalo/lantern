@@ -15,13 +15,15 @@
 //! playlist's font in `genex.bmp`'s colours.
 
 use lantern_library::view::{Column, Sort};
-use lantern_skin::{GenFont, Skin, SpriteKey};
+use lantern_skin::Skin;
 
 use super::blit::{self, Surface};
-use super::font::{TextFont, TextStyle};
-use super::gen_controls::{self as gc, ARROW, ScrollState, rgb};
+use super::font::TextFont;
+use super::gen_controls::{self as gc, ARROW, ScrollState, clip, rgb, style, text_in};
+pub use super::gen_window::content_area;
+use super::gen_window::{self, LEFT, RIGHT, TOP};
 use super::geometry::Rect;
-use super::main_window::{NO_SKIN_BACKGROUND, draw_sprite};
+use super::main_window::NO_SKIN_BACKGROUND;
 use super::{Widget, WidgetId, WidgetKind};
 
 pub const TITLE_DRAG: WidgetId = WidgetId(300);
@@ -79,7 +81,7 @@ pub const ALL_COLUMNS: [(Column, &str, &str, u32, bool, bool); 13] = [
     (Column::TrackNo, "track", "Track #", 42, true, true),
     (Column::Genre, "genre", "Genre", 60, false, true),
     (Column::Year, "year", "Year", 34, true, true),
-    (Column::Rating, "rating", "Rating", 40, false, true),
+    (Column::Rating, "rating", "Rating", 42, false, true),
     (Column::PlayCount, "plays", "Play Count", 58, true, true),
     (
         Column::LastPlayed,
@@ -92,6 +94,15 @@ pub const ALL_COLUMNS: [(Column, &str, &str, u32, bool, bool); 13] = [
     (Column::Added, "added", "Date Added", 70, false, false),
     (Column::Bitrate, "bitrate", "Bitrate", 44, true, false),
     (Column::Path, "path", "File", 200, false, false),
+];
+
+/// The list's columns while it lists the playlists themselves, under the
+/// Playlists heading: header, width, set right.
+pub const PLAYLIST_COLUMNS: [(&str, u32, bool); 4] = [
+    ("Playlist", 180, false),
+    ("Items", 50, true),
+    ("Length", 64, true),
+    ("From", 90, false),
 ];
 
 /// The columns shown: indices into [`ALL_COLUMNS`], each with its width.
@@ -250,18 +261,6 @@ pub const DEFAULT_HEIGHT: u32 = 348;
 
 pub const TITLE: &str = "Lantern Library";
 
-const TOP: u32 = 20;
-const BOTTOM: u32 = 14;
-const LEFT: u32 = 11;
-const RIGHT: u32 = 8;
-/// Every title-bar piece, and the bottom corners' overlap allowance.
-const PIECE: i32 = 25;
-/// Space either side of the title, between it and the end caps. Measured
-/// against Winamp; Webamp's (4, 3) sets the caps 4px too close.
-const TITLE_PAD: (i32, i32) = (8, 7);
-/// The title's letters sit this far down the bar.
-const TITLE_Y: i32 = 4;
-
 pub fn widgets(width: u32, height: u32, tree_width: u32, filters: bool) -> Vec<Widget> {
     let w = |id, x, y, width, height, kind| Widget::new(id, Rect::new(x, y, width, height), kind);
     let at = |id, r: Rect, kind| Widget::new(id, r, kind);
@@ -274,7 +273,8 @@ pub fn widgets(width: u32, height: u32, tree_width: u32, filters: bool) -> Vec<W
         at(TREE, l.tree, HitZone),
         at(TREE_SCROLL, l.tree_scroll, Slider),
         at(LIBRARY_BUTTON, l.library_button, Button),
-        at(SEARCH, l.search, HitZone),
+        // A drag across the search box selects.
+        at(SEARCH, l.search, Slider),
         at(CLEAR, l.clear, Button),
         // The header and the list take drags — to resize and move columns,
         // and to carry tracks to the playlist — so they hold the pointer.
@@ -295,16 +295,6 @@ pub fn widgets(width: u32, height: u32, tree_width: u32, filters: bool) -> Vec<W
     // Last, so it wins where it overlaps the frame's corner.
     v.push(w(RESIZE, wi - 20, hi - 20, 20, 20, Slider));
     v
-}
-
-/// Where the window's contents go: inside the frame.
-pub fn content_area(width: u32, height: u32) -> Rect {
-    Rect::new(
-        LEFT as i32,
-        TOP as i32,
-        width - LEFT - RIGHT,
-        height - TOP - BOTTOM,
-    )
 }
 
 /// One line of the tree.
@@ -354,6 +344,10 @@ pub struct LibraryView {
     pub search: String,
     /// Where the caret is in `search`, in chars, while it has the keyboard.
     pub caret: Option<usize>,
+    /// The selected stretch of `search`, in chars.
+    pub search_selection: Option<(usize, usize)>,
+    /// The stretch of `search` an input method is still composing.
+    pub search_marked: Option<(usize, usize)>,
     /// The order shown on the headers; `None` for a playlist's own order.
     pub sort: Option<Sort>,
     /// The list's rows in view, top first.
@@ -370,53 +364,43 @@ pub struct LibraryView {
     pub column_drop: Option<i32>,
     /// The Artist and Album panes, for a view that has them.
     pub filters: Option<FilterView>,
+    /// The list lists playlists, in [`PLAYLIST_COLUMNS`], not tracks.
+    pub listing_playlists: bool,
     /// What the list holds, or what the library is busy with.
     pub status: String,
 }
 
 /// Text as the playlist sets it.
-const FONT_PX: f32 = 9.0;
-const LETTER_SPACING: f32 = 0.5;
+/// Each rating star's slot in the Rating column, from the cell's left.
+pub const STAR_STEP: i32 = 7;
+const STAR_LEFT: i32 = 3;
+const STAR: [&str; 5] = ["..#..", ".###.", "#####", ".###.", ".#.#."];
 
-fn style(scale: u32) -> TextStyle {
-    let s = scale as f32;
-    TextStyle {
-        px: FONT_PX * s,
-        spacing: LETTER_SPACING * s,
-    }
+/// Which star a click `x` pixels into a Rating cell lands on, 1 to 5.
+pub fn star_at(x: i32) -> u8 {
+    ((x - STAR_LEFT).max(0) / STAR_STEP + 1).min(5) as u8
 }
 
-/// Text in `font`, cut to fit `r` and set on its middle; right-aligned
-/// within it if `right`, centred if `centre`.
-#[allow(clippy::too_many_arguments)]
-fn text_in(
-    dst: &mut Surface<'_>,
-    font: &TextFont,
-    text: &str,
-    r: Rect,
-    colour: u32,
-    (right, centre): (bool, bool),
-    scale: u32,
-) {
-    let s = scale as f32;
-    let st = style(scale);
-    let pad = 2.0 * s;
-    let room = r.w as f32 * s - 2.0 * pad;
-    if room <= 0.0 {
-        return;
+/// Five star slots: `filled` drawn whole, the rest as a dot, to click.
+fn draw_stars(dst: &mut Surface<'_>, cell: Rect, filled: usize, colour: u32, scale: u32) {
+    let y = cell.y + (cell.h as i32 - 5) / 2;
+    for n in 0..5 {
+        let x = cell.x + STAR_LEFT + n as i32 * STAR_STEP;
+        if x + 5 > cell.x + cell.w as i32 {
+            break;
+        }
+        if n < filled {
+            for (dy, row) in STAR.iter().enumerate() {
+                for (dx, c) in row.bytes().enumerate() {
+                    if c == b'#' {
+                        blit::fill_rect(dst, x + dx as i32, y + dy as i32, 1, 1, colour, scale);
+                    }
+                }
+            }
+        } else {
+            blit::fill_rect(dst, x + 2, y + 2, 1, 1, colour, scale);
+        }
     }
-    let fitted = font.fit(text, st, room);
-    let w = font.width(&fitted, st);
-    let left = r.x as f32 * s;
-    let x = if centre {
-        left + (r.w as f32 * s - w) / 2.0
-    } else if right {
-        left + r.w as f32 * s - pad - w
-    } else {
-        left + pad
-    };
-    let baseline = (r.y + (r.h as i32 + 7) / 2) * scale as i32;
-    font.draw(dst, &fitted, (x, baseline), st, colour);
 }
 
 /// A small solid triangle, 5 wide, pointing down if `down`, else right.
@@ -428,11 +412,6 @@ fn triangle(dst: &mut Surface<'_>, x: i32, y: i32, down: bool, colour: u32, scal
             blit::fill_rect(dst, x + k, y + k - 2, 1, (5 - 2 * k) as u32, colour, scale);
         }
     }
-}
-
-fn clip(dst: &mut Surface<'_>, r: Rect, scale: u32) {
-    let c = lantern_skin::Rect::new(r.x.max(0) as u32, r.y.max(0) as u32, r.w, r.h);
-    dst.set_clip(Some(c), scale);
 }
 
 /// A list header's cell: its background, lit top and left, shaded bottom
@@ -560,22 +539,17 @@ pub fn draw(
 
     // Search.
     let text_fg = rgb(colours.window_text);
-    let r = l.search;
-    blit::fill_rect(dst, r.x, r.y, r.w, r.h, item_bg, scale);
-    gc::sunken(dst, &colours, r, scale);
     if let Some(font) = font {
         let (lx, ly) = l.search_label;
         let label = Rect::new(lx - 2, ly - 10, 48, 13);
         text_in(dst, font, "Search:", label, text_fg, (false, false), scale);
-        clip(dst, r, scale);
-        text_in(dst, font, &view.search, r, item_fg, (false, false), scale);
-        if let Some(caret) = view.caret {
-            let before: String = view.search.chars().take(caret).collect();
-            let s = scale as f32;
-            let x = ((r.x as f32 + 2.0) * s + font.width(&before, style(scale))) / s;
-            blit::fill_rect(dst, x.round() as i32, r.y + 2, 1, r.h - 4, item_fg, scale);
-        }
-        dst.set_clip(None, scale);
+        let f = gc::Field {
+            text: &view.search,
+            caret: view.caret,
+            selection: view.search_selection,
+            marked: view.search_marked,
+        };
+        gc::field(dst, font, &colours, l.search, &f, scale);
     }
 
     if let (Some(panes), Some(fv)) = (l.filters, &view.filters) {
@@ -637,13 +611,27 @@ pub fn draw(
     );
     let mut x = h.x - view.columns_offset as i32;
     clip(dst, h, scale);
-    for &(index, width) in &view.columns {
-        let (column, _, label, ..) = ALL_COLUMNS[index];
+    // What heads the list: the track columns shown, or the playlists'.
+    let heads: Vec<(Option<Column>, &str, u32, bool)> = if view.listing_playlists {
+        PLAYLIST_COLUMNS
+            .iter()
+            .map(|&(label, width, right)| (None, label, width, right))
+            .collect()
+    } else {
+        view.columns
+            .iter()
+            .map(|&(i, width)| {
+                let c = ALL_COLUMNS[i];
+                (Some(c.0), c.2, width, c.4)
+            })
+            .collect()
+    };
+    for &(column, label, width, _) in &heads {
         let cell = Rect::new(x, h.y, width, h.h);
         header_cell(dst, &colours, cell, scale);
         let head_fg = rgb(colours.list_header_text);
         let mut text = cell;
-        if let Some(sort) = view.sort.filter(|s| s.column == column) {
+        if let Some(sort) = view.sort.filter(|s| Some(s.column) == column) {
             // The sorted column shows its direction at its right.
             let ax = cell.x + cell.w as i32 - 9;
             let ay = cell.y + 5;
@@ -676,11 +664,15 @@ pub fn draw(
         }
         let Some(font) = font else { continue };
         let mut x = r.x - view.columns_offset as i32;
-        for (cell, &(index, width)) in row.cells.iter().zip(&view.columns) {
-            let right = ALL_COLUMNS[index].4;
+        for (cell, &(column, _, width, right)) in row.cells.iter().zip(&heads) {
             let at = Rect::new(x, y, width, ROW_HEIGHT);
             if x + (width as i32) > r.x && x < r.x + r.w as i32 {
-                text_in(dst, font, cell, at, fg, (right, false), scale);
+                if column == Some(Column::Rating) {
+                    let stars = cell.chars().filter(|&c| c == '*').count();
+                    draw_stars(dst, at, stars, fg, scale);
+                } else {
+                    text_in(dst, font, cell, at, fg, (right, false), scale);
+                }
             }
             x += width as i32;
         }
@@ -707,202 +699,13 @@ pub fn draw(
         text_in(dst, font, &view.status, r, text_fg, (false, false), scale);
     }
 
-    draw_frame(dst, skin, view, TITLE, scale);
-    if pressed(CLOSE) {
-        draw_sprite(
-            dst,
-            skin,
-            SpriteKey::GenClosePressed,
-            view.width as i32 - 11,
-            3,
-            scale,
-        );
-    }
-}
-
-/// Repeat `key` along `y` to fill `from..to`, clipping at both ends. Tiles
-/// start at `from`, or with `from_right`, end flush at `to` — Webamp's
-/// `background-position: right`.
-#[allow(clippy::too_many_arguments)]
-fn tile_x(
-    dst: &mut Surface<'_>,
-    skin: &Skin,
-    key: SpriteKey,
-    (from, to): (i32, i32),
-    y: i32,
-    from_right: bool,
-    scale: u32,
-) {
-    let step = skin.resolve(key).1.w as i32;
-    if step == 0 || to <= from {
-        return;
-    }
-    let h = skin.resolve(key).1.h;
-    let clip = lantern_skin::Rect::new(from.max(0) as u32, y.max(0) as u32, (to - from) as u32, h);
-    dst.set_clip(Some(clip), scale);
-    let span = to - from;
-    let mut x = if from_right {
-        to - (span + step - 1) / step * step
-    } else {
-        from
-    };
-    while x < to {
-        draw_sprite(dst, skin, key, x, y, scale);
-        x += step;
-    }
-    dst.set_clip(None, scale);
-}
-
-/// Repeat `key` down `x` to fill `from..to`, clipping the last copy.
-fn tile_y(
-    dst: &mut Surface<'_>,
-    skin: &Skin,
-    key: SpriteKey,
-    x: i32,
-    (from, to): (i32, i32),
-    scale: u32,
-) {
-    let (_, src) = skin.resolve(key);
-    if src.h == 0 || to <= from {
-        return;
-    }
-    let clip = lantern_skin::Rect::new(
-        x.max(0) as u32,
-        from.max(0) as u32,
-        src.w,
-        (to - from) as u32,
-    );
-    dst.set_clip(Some(clip), scale);
-    let mut y = from;
-    while y < to {
-        draw_sprite(dst, skin, key, x, y, scale);
-        y += src.h as i32;
-    }
-    dst.set_clip(None, scale);
-}
-
-/// Where the title bar's pieces go for a title `title_w` wide: the two
-/// fills share what is left over, the right one taking any odd pixel.
-/// Returns the left fill's width and the title's left edge.
-fn title_layout(width: i32, title_w: i32) -> (i32, i32) {
-    let label = title_w + TITLE_PAD.0 + TITLE_PAD.1;
-    let fills = (width - 4 * PIECE - label).max(0);
-    let left_fill = fills / 2;
-    (left_fill, 2 * PIECE + left_fill + TITLE_PAD.0)
-}
-
-/// The frame around a generic window, titled `title`.
-pub fn draw_frame(dst: &mut Surface<'_>, skin: &Skin, view: &LibraryView, title: &str, scale: u32) {
-    let (w, h) = (view.width as i32, view.height as i32);
-    let active = view.focused;
-    let font: &GenFont = skin.gen_font();
-    let sprite = |dst: &mut Surface<'_>, key, x, y| draw_sprite(dst, skin, key, x, y, scale);
-
-    // Top: the centre fill runs behind everything, showing only around the
-    // title; corners, fills and caps go over it.
-    let title_w = font.width(title, active) as i32;
-    let (left_fill, title_x) = title_layout(w, title_w);
-    let right_end = title_x + title_w + TITLE_PAD.1;
-    tile_x(
-        dst,
-        skin,
-        SpriteKey::GenTopCenterFill { active },
-        (0, w),
-        0,
-        false,
-        scale,
-    );
-    let fill = SpriteKey::GenTopLeftRightFill { active };
-    tile_x(dst, skin, fill, (PIECE, PIECE + left_fill), 0, false, scale);
-    tile_x(
-        dst,
-        skin,
-        fill,
-        (right_end + PIECE, w - PIECE),
-        0,
-        true,
-        scale,
-    );
-    sprite(dst, SpriteKey::GenTopLeft { active }, 0, 0);
-    sprite(
-        dst,
-        SpriteKey::GenTopLeftEnd { active },
-        PIECE + left_fill,
-        0,
-    );
-    sprite(dst, SpriteKey::GenTopRightEnd { active }, right_end, 0);
-    sprite(dst, SpriteKey::GenTopRight { active }, w - PIECE, 0);
-    draw_title(dst, skin, title, title_x, active, scale);
-
-    // Sides: tiled down from the top, with their bottom pieces flush with
-    // the bottom bar.
-    let (top, bottom) = (TOP as i32, h - BOTTOM as i32);
-    let right = w - RIGHT as i32;
-    tile_y(dst, skin, SpriteKey::GenMiddleLeft, 0, (top, bottom), scale);
-    tile_y(
-        dst,
-        skin,
-        SpriteKey::GenMiddleRight,
-        right,
-        (top, bottom),
-        scale,
-    );
-    let foot = bottom - skin.resolve(SpriteKey::GenMiddleLeftBottom).1.h as i32;
-    if foot >= top {
-        sprite(dst, SpriteKey::GenMiddleLeftBottom, 0, foot);
-        sprite(dst, SpriteKey::GenMiddleRightBottom, right, foot);
-    }
-
-    // Bottom: filled, then the corners at either end.
-    tile_x(
-        dst,
-        skin,
-        SpriteKey::GenBottomFill,
-        (0, w),
-        bottom,
-        false,
-        scale,
-    );
-    sprite(dst, SpriteKey::GenBottomLeft, 0, bottom);
-    let corner = skin.resolve(SpriteKey::GenBottomRight).1.w as i32;
-    sprite(dst, SpriteKey::GenBottomRight, w - corner, bottom);
-}
-
-fn draw_title(dst: &mut Surface<'_>, skin: &Skin, title: &str, x: i32, active: bool, scale: u32) {
-    let Some(sheet) = skin.sheet(lantern_skin::SheetId::Gen) else {
-        return;
-    };
-    let mut x = x;
-    for c in title.chars() {
-        match skin.gen_font().letter(c, active) {
-            Some(r) => {
-                let s = scale as i32;
-                blit::blit(dst, sheet, r, x * s, TITLE_Y * s, scale);
-                x += r.w as i32;
-            }
-            None => x += GenFont::SPACE as i32,
-        }
-    }
+    let frame = (view.width, view.height, view.focused);
+    gen_window::draw_frame(dst, skin, frame, TITLE, pressed(CLOSE), scale);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn title_is_centred_between_the_caps() {
-        // 500 wide, a 100px title: 285px of fill, 142 left and 143 right.
-        let (left_fill, x) = title_layout(500, 100);
-        assert_eq!(left_fill, 142);
-        assert_eq!(x, 50 + 142 + 8);
-        let right_end = x + 100 + 7;
-        assert_eq!(500 - 25 - (right_end + 25), 143);
-    }
-
-    #[test]
-    fn an_overlong_title_squeezes_the_fills_to_nothing() {
-        assert_eq!(title_layout(275, 400), (0, 58));
-    }
 
     #[test]
     fn widgets_stay_inside_the_window() {
@@ -978,6 +781,14 @@ mod tests {
     }
 
     #[test]
+    fn clicks_land_on_stars() {
+        assert_eq!(star_at(0), 1);
+        assert_eq!(star_at(STAR_LEFT + STAR_STEP), 2);
+        assert_eq!(star_at(STAR_LEFT + 4 * STAR_STEP + 2), 5);
+        assert_eq!(star_at(200), 5);
+    }
+
+    #[test]
     fn the_tree_keeps_within_bounds() {
         assert_eq!(clamp_tree_width(500, 10), MIN_TREE_WIDTH);
         // 500 wide: 481 inside, less the list's 120 and the gap.
@@ -990,12 +801,6 @@ mod tests {
         let cols = default_columns();
         assert_eq!(cols.len(), 10);
         assert_eq!(cols[0], (0, 100));
-        assert_eq!(columns_width(&cols), 674);
-    }
-
-    #[test]
-    fn content_fills_the_frame() {
-        let r = content_area(500, 348);
-        assert_eq!((r.x, r.y, r.w, r.h), (11, 20, 481, 314));
+        assert_eq!(columns_width(&cols), 676);
     }
 }

@@ -13,6 +13,8 @@
 
 mod dialogs;
 mod equalizer;
+mod info;
+mod jump;
 mod library;
 mod library_ui;
 mod media;
@@ -38,7 +40,8 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, Position};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
+use winit::keyboard::{Key, ModifiersState};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
 use crate::ui::blit::Surface;
@@ -46,7 +49,7 @@ use crate::ui::font::TextFont;
 use crate::ui::geometry::{EQ_HEIGHT, MAIN_HEIGHT, SHADE_HEIGHT, WINDOW_WIDTH};
 use crate::ui::marquee::Marquee;
 use crate::ui::{Input, Widget, WidgetId, WidgetKind, eq_window, hit_test, layout, main_window};
-use crate::ui::{library_window, playlist_window};
+use crate::ui::{info_window, jump_window, library_window, playlist_window};
 
 /// Redraw interval while audio plays: the analyser wants 60fps.
 const PLAYING_FRAME: Duration = Duration::from_micros(16_667);
@@ -63,6 +66,10 @@ pub enum PaneKind {
     Equalizer,
     Playlist,
     Library,
+    /// Jump to File.
+    Jump,
+    /// File Info.
+    Info,
 }
 
 impl PaneKind {
@@ -99,6 +106,9 @@ pub struct App {
     pl_resize: Option<(i32, i32)>,
     /// The bottom-bar menu that is open, if any.
     pl_menu: Option<playlist_window::OpenMenu>,
+    /// While library tracks are dragged over the playlist: the row they
+    /// would go in before.
+    pl_drop: Option<usize>,
     /// The open menu was opened by the press still held, and the pointer
     /// has not left the item under its button.
     pl_menu_fresh: bool,
@@ -137,6 +147,8 @@ pub struct App {
     library: library::LibraryState,
     /// What the library window has selected, typed and scrolled to.
     lib_ui: library_ui::LibraryUi,
+    jump: jump::JumpUi,
+    file_info: info::InfoUi,
 
     /// When the next animation frame is due.
     next_frame_at: Option<Instant>,
@@ -217,6 +229,7 @@ impl App {
             pl_last_click: None,
             pl_resize: None,
             pl_menu: None,
+            pl_drop: None,
             pl_menu_fresh: false,
             font: TextFont::load(&font_name),
             tags: tags::TagLoader::new(),
@@ -245,6 +258,8 @@ impl App {
             lib_resize: None,
             library: library::LibraryState::open(settings::config_dir()),
             lib_ui: library_ui::LibraryUi::default(),
+            jump: jump::JumpUi::default(),
+            file_info: info::InfoUi::default(),
             next_frame_at: None,
             context: None,
             panes: Vec::new(),
@@ -293,6 +308,7 @@ impl App {
                 PaneKind::Equalizer => self.restored.equalizer,
                 PaneKind::Playlist => self.restored.playlist,
                 PaneKind::Library => self.restored.library,
+                PaneKind::Jump | PaneKind::Info => settings::WindowPlace::default(),
             };
             self.pane(kind).map_or(fallback, |p| settings::WindowPlace {
                 position: p.window.outer_position().ok().map(|pos| {
@@ -370,14 +386,16 @@ impl App {
             PaneKind::Equalizer => (WINDOW_WIDTH, EQ_HEIGHT),
             PaneKind::Playlist => self.playlist_size,
             PaneKind::Library => self.library_size,
+            PaneKind::Jump => (jump_window::WIDTH, jump_window::HEIGHT),
+            PaneKind::Info => (info_window::WIDTH, info_window::HEIGHT),
         };
         (w, if shaded { SHADE_HEIGHT } else { h })
     }
 
     /// Roll a window up to its 14px strip, or back down.
     pub(crate) fn toggle_shade(&mut self, kind: PaneKind) {
-        // The library has no windowshade mode, as in Winamp.
-        if kind == PaneKind::Library {
+        // The generic windows have no windowshade mode, as in Winamp.
+        if matches!(kind, PaneKind::Library | PaneKind::Jump | PaneKind::Info) {
             return;
         }
         let (width, height) = self.playlist_size;
@@ -395,7 +413,7 @@ impl App {
             (PaneKind::Equalizer, true) => eq_window::shade_widgets(),
             (PaneKind::Playlist, false) => playlist_window::widgets(width, height),
             (PaneKind::Playlist, true) => playlist_window::shade_widgets(width),
-            (PaneKind::Library, _) => return,
+            (PaneKind::Library | PaneKind::Jump | PaneKind::Info, _) => return,
         };
         pane.input.active = None;
         if kind == PaneKind::Main {
@@ -599,13 +617,16 @@ impl App {
         let now = Instant::now();
         let scale = self.scale(kind);
         let lib_view = (kind == PaneKind::Library).then(|| self.library_view());
+        let jump_state = (kind == PaneKind::Jump).then(|| self.jump_state());
+        let info_state = (kind == PaneKind::Info).then(|| self.info_state());
+        let focused = self.pane(kind).is_some_and(|p| p.focused);
         let skin = self.skin.as_ref();
         let shaded = self.pane(kind).is_some_and(|p| p.shaded);
         let (main_view, eq_view, pl_view) = match kind {
             PaneKind::Main => (Some(self.main_view(now)), None, None),
             PaneKind::Equalizer => (None, Some(self.eq_view()), None),
             PaneKind::Playlist => (None, None, Some(self.playlist_view())),
-            PaneKind::Library => (None, None, None),
+            PaneKind::Library | PaneKind::Jump | PaneKind::Info => (None, None, None),
         };
         let eq_shade = eq_window::EqShadeView {
             focused: eq_view.as_ref().is_some_and(|v| v.focused),
@@ -645,9 +666,13 @@ impl App {
                 playlist_window::draw(&mut dst, skin, font, &v, widgets, scale);
             }
             _ => {
+                let font = self.font.as_ref();
                 if let Some(v) = &lib_view {
-                    let font = self.font.as_ref();
                     library_window::draw(&mut dst, skin, font, v, widgets, scale);
+                } else if let Some(j) = &jump_state {
+                    jump_window::draw(&mut dst, skin, font, &j.view(focused), widgets, scale);
+                } else if let Some(i) = &info_state {
+                    info_window::draw(&mut dst, skin, font, &i.view(focused), widgets, scale);
                 }
             }
         }
@@ -693,6 +718,8 @@ impl App {
             PaneKind::Equalizer => "Lantern Equalizer",
             PaneKind::Playlist => "Lantern Playlist",
             PaneKind::Library => library_window::TITLE,
+            PaneKind::Jump => jump_window::TITLE,
+            PaneKind::Info => info_window::TITLE,
         };
         let mut attrs = Window::default_attributes()
             .with_title(title)
@@ -737,7 +764,13 @@ impl App {
             PaneKind::Equalizer => eq_window::widgets(),
             PaneKind::Playlist => playlist_window::widgets(w, h),
             PaneKind::Library => self.library_widgets(),
+            PaneKind::Jump => jump_window::widgets(),
+            PaneKind::Info => info_window::widgets(),
         };
+        // The generic windows' fields take input methods' composed text.
+        if matches!(kind, PaneKind::Library | PaneKind::Jump | PaneKind::Info) {
+            window.set_ime_allowed(true);
+        }
         // Colour-managed without a per-frame conversion; see the notes.
         #[cfg(target_os = "macos")]
         crate::platform::macos::use_srgb(&window);
@@ -851,12 +884,14 @@ impl App {
                 | eq_window::TITLE_DRAG
                 | playlist_window::TITLE_DRAG
                 | library_window::TITLE_DRAG
+                | jump_window::TITLE_DRAG
+                | info_window::TITLE_DRAG
         );
         if is_title {
             // A double-click on a title bar rolls the window up or down —
             // any but the library's, which has no windowshade mode.
             let now = Instant::now();
-            let double = kind != PaneKind::Library
+            let double = !matches!(kind, PaneKind::Library | PaneKind::Jump | PaneKind::Info)
                 && self
                     .title_click
                     .is_some_and(|(k, t)| k == kind && now.duration_since(t) < DOUBLE_CLICK);
@@ -885,6 +920,8 @@ impl App {
         match kind {
             PaneKind::Playlist => self.press_playlist(id, y),
             PaneKind::Library => self.press_library(id, x, y),
+            PaneKind::Jump => self.press_jump(id, x, y),
+            PaneKind::Info => self.press_info(id, x),
             _ => {}
         }
         self.request_redraw(kind);
@@ -930,6 +967,8 @@ impl App {
             PaneKind::Equalizer => self.drag_eq_slider(id, x, y),
             PaneKind::Playlist => self.drag_playlist(id, x, y),
             PaneKind::Library => self.drag_library(id, x, y),
+            PaneKind::Jump => self.drag_jump(id, x, y),
+            PaneKind::Info => self.drag_info(id, x),
         }
     }
 
@@ -938,7 +977,7 @@ impl App {
             PaneKind::Main => self.release_main_slider(id),
             PaneKind::Playlist => self.release_playlist_slider(id),
             PaneKind::Library => self.release_library_slider(id),
-            PaneKind::Equalizer => {}
+            PaneKind::Equalizer | PaneKind::Jump | PaneKind::Info => {}
         }
     }
 
@@ -948,6 +987,8 @@ impl App {
             PaneKind::Equalizer => self.activate_eq(id),
             PaneKind::Playlist => self.activate_playlist(id),
             PaneKind::Library => self.activate_library(id),
+            PaneKind::Jump => self.activate_jump(id),
+            PaneKind::Info => self.activate_info(id),
         }
     }
 
@@ -1042,6 +1083,13 @@ impl ApplicationHandler for App {
         if restored.main.shaded {
             self.toggle_shade(PaneKind::Main);
         }
+        // Jump to File and File Info wait, hidden, near the main window.
+        for kind in [PaneKind::Jump, PaneKind::Info] {
+            let at = self
+                .rect(PaneKind::Main)
+                .map(|m| LogicalPosition::new(m.x + 40.0, m.y + 40.0).into());
+            self.create_pane(event_loop, kind, at);
+        }
         self.restoring = false;
         self.restore_toggles(&restored);
         if let Some(proxy) = self.proxy.clone() {
@@ -1089,11 +1137,16 @@ impl ApplicationHandler for App {
         let now = Instant::now();
         self.tick(now);
         self.poll_library();
+        self.repeat_library_scroll(now);
         self.service_media();
         self.autosave(now);
         let Some(interval) = self.next_frame() else {
             self.next_frame_at = None;
-            event_loop.set_control_flow(ControlFlow::Wait);
+            // A held scrollbar wakes the loop to repeat, even when stopped.
+            match self.library_repeat_due() {
+                Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+                None => event_loop.set_control_flow(ControlFlow::Wait),
+            }
             return;
         };
         // Only a due deadline paints. Requesting a redraw unconditionally
@@ -1109,6 +1162,7 @@ impl ApplicationHandler for App {
             self.next_frame_at = Some(now + interval);
         }
         if let Some(at) = self.next_frame_at {
+            let at = self.library_repeat_due().map_or(at, |r| r.min(at));
             event_loop.set_control_flow(ControlFlow::WaitUntil(at));
         }
     }
@@ -1143,19 +1197,39 @@ impl ApplicationHandler for App {
 
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
 
+            WindowEvent::Ime(ime) => match kind {
+                PaneKind::Library => self.library_ime(ime),
+                PaneKind::Jump => self.jump_ime(ime),
+                PaneKind::Info => self.info_ime(ime),
+                _ => {}
+            },
+
             WindowEvent::KeyboardInput { event, .. } => {
-                // Winamp's Alt+L: by its physical key, as Option turns L
-                // into another character, and AppKit will not reliably
-                // match an Option-only menu shortcut.
+                // Winamp's Alt+L, by the letter the layout puts on the key
+                // (on Dvorak, not the key where QWERTY has L): Option turns
+                // L into another character, so ask what it would be without
+                // modifiers. AppKit will not reliably match an Option-only
+                // menu shortcut, so the menu's own does not do this.
                 let alt_l = self.modifiers.alt_key()
-                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyL);
+                    && matches!(event.key_without_modifiers(), Key::Character(c) if c.eq_ignore_ascii_case("l"));
+                // Winamp's Alt+3: File Info.
+                let alt_3 = self.modifiers.alt_key()
+                    && matches!(event.key_without_modifiers(), Key::Character(c) if c == "3");
                 if event.state == ElementState::Pressed && alt_l {
                     if !event.repeat {
                         self.toggle_library();
                     }
+                } else if event.state == ElementState::Pressed && alt_3 {
+                    if !event.repeat {
+                        self.show_file_info();
+                    }
                 } else if event.state == ElementState::Pressed
-                    && kind == PaneKind::Library
-                    && self.library_key(&event)
+                    && match kind {
+                        PaneKind::Library => self.library_key(&event),
+                        PaneKind::Jump => self.jump_key(&event),
+                        PaneKind::Info => self.info_key(&event),
+                        _ => false,
+                    }
                 {
                 } else if event.state == ElementState::Pressed {
                     let handled =
@@ -1169,6 +1243,7 @@ impl ApplicationHandler for App {
             WindowEvent::MouseWheel { delta, .. } => match kind {
                 PaneKind::Playlist => self.wheel_playlist(delta),
                 PaneKind::Library => self.wheel_library(delta),
+                PaneKind::Jump => self.wheel_jump(delta),
                 _ => {}
             },
 

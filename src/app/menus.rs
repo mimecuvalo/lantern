@@ -105,6 +105,7 @@ impl App {
                 menu.append_items(&[
                     &item("play_files", "Play File…"),
                     &item("play_folder", "Play Folder…"),
+                    &item("file_info", "View File Info…"),
                     &sep(),
                     &item("load_skin", "Load Skin…"),
                     &item("default_skin", "Default Skin"),
@@ -120,6 +121,8 @@ impl App {
                         &item("pause", "Pause"),
                         &item("stop", "Stop"),
                         &item("next", "Next"),
+                        &sep(),
+                        &item("jump", "Jump to File…"),
                         &sep(),
                         &check("shuffle", "Shuffle", self.widget_on(layout::SHUFFLE)),
                         &check("repeat", "Repeat", self.widget_on(layout::REPEAT)),
@@ -223,6 +226,7 @@ impl App {
                     menu.append(&item("lib_unlist", "Remove from Playlist"))?;
                 }
                 menu.append_items(&[
+                    &item("lib_info", "File Info…"),
                     &item("lib_reveal", "Show in Finder"),
                     &item("lib_forget", "Remove from Library"),
                 ])?;
@@ -348,6 +352,7 @@ impl App {
             "get_skins" => open_url(SKIN_MUSEUM),
             "prev" => self.skip(false),
             "next" => self.skip(true),
+            "jump" => self.open_jump(),
             "play" => self.play(),
             "pause" => self.toggle_pause(),
             "stop" => self.send(Command::Stop),
@@ -367,6 +372,7 @@ impl App {
             "lib_play" => self.send_library_selection(true),
             "lib_enqueue" => self.send_library_selection(false),
             "lib_reveal" => self.reveal_library_selection(),
+            "lib_info" => self.library_selection_info(),
             "lib_forget" => self.remove_library_selection(),
             "lib_columns_reset" => self.reset_library_columns(),
             "lib_new_playlist" => {

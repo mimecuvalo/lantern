@@ -6,7 +6,9 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 A native Winamp 2.x-compatible music player for macOS, written in **Rust**.
 
-**Status: M6 of 7 done** (see the milestone table in the design doc).
+**Status: M1–M6 done, and past them the media library (watched folders,
+Apple Music import, views, filters, playlists), Jump to File and File Info.
+M7, packaging, waits on an icon** (see the milestone table in the design doc).
 **Read `docs/design/2026-09-21-rust-architecture.md` before writing any code.**
 It fixes the threading model, crate layout, dependency choices and milestones.
 Deviating from it is fine; doing so silently is not.
@@ -59,8 +61,13 @@ crates/
 src/
   main.rs                       — arguments, skin, event loop
   app/                          — one Pane per window; behaviour per window
-  ui/                           — layout and drawing: blitter, fonts, windows
-  platform/macos.rs             — region mask, menus, media keys, sRGB windows
+                                  (library, library_ui, jump, info, text_edit…)
+  ui/                           — layout and drawing: blitter, fonts, windows;
+                                  gen_window/gen_controls draw the generic
+                                  windows (library, Jump to File, File Info)
+  platform/macos.rs             — region mask, menus, media keys, sRGB windows,
+                                  clipboard
+  platform/apple_music.rs       — the Apple Music library via iTunesLibrary
 assets/
   default-skin.wsz              — the built-in skin (Night): original art, generated
                                   by `cargo run -p lantern-skin --example
@@ -96,12 +103,12 @@ only the Command Line Tools. Full Xcode is **not** required.
 
 ### Seeing what it renders, without a display
 
-The main window can be drawn to a plain buffer and dumped as a PNG (one per
-skin: the fixture, the built-in, and any local skins in `skins/`), which is
-the practical way to check sprite work:
+Every window can be drawn to a plain buffer and dumped as a PNG (one per
+skin: the fixture, the built-in, Lantern's themes, and any local skins in
+`skins/`), which is the practical way to check sprite work:
 
 ```bash
-LANTERN_RENDER_DUMP=/tmp cargo test --bin lantern render -- --nocapture   # all three windows
+LANTERN_RENDER_DUMP=/tmp cargo test --bin lantern render -- --nocapture   # every window
 ```
 
 ### Test fixtures

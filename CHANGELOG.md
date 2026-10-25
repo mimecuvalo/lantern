@@ -12,6 +12,15 @@ the project, kept here because the git history itself was then cleared.
 
 ### Added
 
+- **Jump to File**, Winamp's J (also in the main menu's Playback submenu):
+  type a few words and the playlist narrows to the entries that match;
+  Up and Down pick one, Enter or a double-click plays it.
+- **File Info** is a window now, not a message box: the file's title,
+  artist, album, album artist, genre, year, track and disc, to change and
+  save into the file — the playlist and the library pick up the new tags —
+  and its format, length, bitrate, sample rate, channels and size. From the
+  clutter bar's I, the I key, Option-3 (Winamp's Alt+3), View File Info… in the main menu, the
+  playlist's menus, and the library's File Info….
 - **The media library**, so far its window and what is behind it. Alt-L (or
   Media Library in the Window menu and the main menu's Windows submenu) shows
   and hides the window, which drags, snaps, docks and resizes like the
@@ -41,6 +50,12 @@ the project, kept here because the git history itself was then cleared.
   dragging tracks onto a playlist in the tree, or Save to Library Playlist
   from the playlist window — renamed in place, played, enqueued, trimmed
   and deleted. Imported Apple Music playlists can be played and deleted.
+  Scroll arrows and tracks repeat while held. The search box selects (Shift
+  with the arrows, drag, Shift-click, double-click), copies, cuts and pastes,
+  and takes input methods' composed text. The Rating column's stars rate a
+  track with a click. A line in the playlist shows where dragged tracks will
+  land. The Playlists heading lists the playlists, to open, play or
+  enqueue.
 - **`scripts/bundle-app.sh`** builds Lantern into `Lantern.app` and can
   launch it. Importing straight from Apple Music needs Lantern running as an
   app; run from a terminal, the import now says so.

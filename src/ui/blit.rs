@@ -129,12 +129,6 @@ pub fn fill_rect(dst: &mut Surface<'_>, x: i32, y: i32, w: u32, h: u32, rgb: u32
     }
 }
 
-/// Repeat `src` to fill `dest`. Used by the playlist frame's nine tiles and
-/// the equaliser background.
-pub fn tile(_dst: &mut Surface<'_>, _sheet: &Sheet, _src: Rect, _dest: Rect, _scale: u32) {
-    todo!("M5")
-}
-
 /// Fill the whole surface with one colour.
 pub fn clear(dst: &mut Surface<'_>, rgb: u32) {
     dst.pixels.fill(rgb);

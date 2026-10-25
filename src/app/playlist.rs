@@ -307,7 +307,7 @@ impl App {
         self.request_redraw(PaneKind::Playlist);
     }
 
-    fn scroll_into_view(&mut self, i: usize) {
+    pub(super) fn scroll_into_view(&mut self, i: usize) {
         let rows = self.rows_in_view().max(1);
         if i < self.pl_scroll {
             self.scroll_to(i);
@@ -361,6 +361,10 @@ impl App {
             running_time,
             mini_time,
             menu: self.pl_menu,
+            drop_line: self
+                .pl_drop
+                .and_then(|at| at.checked_sub(self.pl_scroll))
+                .filter(|&n| n <= self.rows_in_view()),
         }
     }
 
@@ -472,31 +476,6 @@ impl App {
         self.scroll_to(self.pl_scroll);
         self.requeue();
         self.request_redraw(PaneKind::Playlist);
-    }
-
-    /// The selected entry's facts, in a native message box — Winamp's file
-    /// info dialog was a tag editor, which is out of scope.
-    pub(super) fn show_file_info(&self) {
-        let Some(e) = self
-            .playlist
-            .entries()
-            .iter()
-            .find(|e| e.selected)
-            .or_else(|| self.playlist.current().and_then(|i| self.playlist.get(i)))
-        else {
-            return;
-        };
-        let mut text = format!("{}\n\n{}", e.display_title(), e.path.display());
-        if let Some(d) = e.duration {
-            text.push_str(&format!("\n\nLength: {}", clock(d)));
-        }
-        if let Some(seg) = e.segment {
-            text.push_str(&format!("\nCue track from {}", clock(seg.start)));
-        }
-        rfd::MessageDialog::new()
-            .set_title("File info")
-            .set_description(text)
-            .show();
     }
 
     fn show_sort_menu(&mut self) {

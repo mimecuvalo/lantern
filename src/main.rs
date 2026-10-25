@@ -77,7 +77,9 @@ fn main() -> Result<()> {
         None => (app::default_skin(), None),
     };
 
-    println!("keys: x play, c pause, v stop, arrows seek/volume, cmd-q quits");
+    println!(
+        "keys: x play, c pause, v stop, j jump to file, i file info, arrows seek/volume, cmd-q quits"
+    );
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -241,7 +243,7 @@ mod window_render_tests {
     use ui::eq_window::{self, EqView};
     use ui::playlist_window::{self, PlaylistView};
 
-    fn dump(name: &str, pixels: &[u32], w: u32, h: u32) {
+    pub(crate) fn dump(name: &str, pixels: &[u32], w: u32, h: u32) {
         let Ok(dir) = std::env::var("LANTERN_RENDER_DUMP") else {
             return;
         };
@@ -317,6 +319,7 @@ mod window_render_tests {
                         menu: lantern_skin::PlaylistMenu::Remove,
                         hover: Some(2),
                     }),
+                    drop_line: Some(5),
                 };
                 let widgets = playlist_window::widgets(w, h);
                 let font = ui::font::TextFont::load(&skin.playlist_style.font);
@@ -426,6 +429,8 @@ mod window_render_tests {
                     tree_scroll: scroll(0.0, 1.0),
                     search: "hot rock".into(),
                     caret: focused.then_some(3),
+                    search_selection: Some((4, 8)),
+                    search_marked: None,
                     sort: Some(Sort {
                         column: Column::Artist,
                         descending: false,
@@ -433,11 +438,13 @@ mod window_render_tests {
                     rows: rows.iter().take(shown).cloned().collect(),
                     list_scroll: scroll(0.3, 0.4),
                     list_hscroll: scroll(0.0, 0.5),
-                    columns_offset: 0,
+                    // The widest case scrolls the columns, to show the rest.
+                    columns_offset: if w == 650 { 260 } else { 0 },
                     columns: library_window::default_columns(),
                     tree_width,
                     column_drop: None,
                     filters,
+                    listing_playlists: false,
                     status: "1,234 items [3:24:11]".into(),
                 };
                 let font = ui::font::TextFont::load(&skin.playlist_style.font);
@@ -455,6 +462,86 @@ mod window_render_tests {
                 assert_eq!(gaps, 0, "{name} {w}x{h}: {gaps} pixels unpainted");
                 dump(&format!("library-{name}-{w}x{h}"), &px, w, h);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod dialog_render_tests {
+    use super::*;
+    use ui::blit::Surface;
+    use ui::gen_controls::{Field, ScrollState};
+    use ui::{info_window, jump_window};
+
+    fn field(text: &str, caret: Option<usize>) -> Field<'_> {
+        Field {
+            text,
+            caret,
+            selection: None,
+            marked: None,
+        }
+    }
+
+    fn painted_all(px: &[u32]) -> bool {
+        !px.contains(&ui::main_window::NO_SKIN_BACKGROUND)
+    }
+
+    #[test]
+    fn jump_and_info_windows_render() {
+        for (name, skin) in crate::tests::skins() {
+            let font = ui::font::TextFont::load(&skin.playlist_style.font);
+
+            let (w, h) = (jump_window::WIDTH, jump_window::HEIGHT);
+            let mut px = vec![0u32; (w * h) as usize];
+            let view = jump_window::JumpView {
+                focused: true,
+                field: field("sleater", Some(7)),
+                rows: (1..=14)
+                    .map(|n| (format!("{n}. Sleater-Kinney - Song {n}"), n == 3))
+                    .collect(),
+                scroll: ScrollState {
+                    position: 0.2,
+                    visible: 0.5,
+                    pressed: None,
+                },
+            };
+            let widgets = jump_window::widgets();
+            let mut dst = Surface::new(&mut px, w, h);
+            jump_window::draw(&mut dst, Some(&skin), font.as_ref(), &view, &widgets, 1);
+            assert!(painted_all(&px), "{name}: jump window has gaps");
+            crate::window_render_tests::dump(&format!("jump-{name}"), &px, w, h);
+
+            let (w, h) = (info_window::WIDTH, info_window::HEIGHT);
+            let mut px = vec![0u32; (w * h) as usize];
+            let values = [
+                "Start Together",
+                "Sleater-Kinney",
+                "The Hot Rock",
+                "",
+                "Indie",
+                "1999",
+                "1",
+                "",
+            ];
+            let view = info_window::InfoView {
+                focused: true,
+                fields: std::array::from_fn(|i| field(values[i], (i == 0).then_some(5))),
+                details: vec![
+                    "Format: MP3".into(),
+                    "Length: 2:39".into(),
+                    "Bitrate: 320 kbps".into(),
+                    "Sample rate: 44100 Hz".into(),
+                    "Channels: stereo".into(),
+                    "Size: 8.7 MB".into(),
+                    "/Music/Sleater-Kinney/The Hot Rock/01 Start Together.mp3".into(),
+                ],
+                message: "Saved",
+            };
+            let widgets = info_window::widgets();
+            let mut dst = Surface::new(&mut px, w, h);
+            info_window::draw(&mut dst, Some(&skin), font.as_ref(), &view, &widgets, 1);
+            assert!(painted_all(&px), "{name}: info window has gaps");
+            crate::window_render_tests::dump(&format!("info-{name}"), &px, w, h);
         }
     }
 }

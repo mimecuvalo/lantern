@@ -32,6 +32,23 @@ pub fn clipboard_text() -> Option<String> {
     text.map(|t| t.to_string())
 }
 
+/// Put `text` on the clipboard, in place of what was there.
+pub fn set_clipboard_text(text: &str) {
+    use objc2_foundation::NSString;
+    let Some(class) = objc2::runtime::AnyClass::get(c"NSPasteboard") else {
+        return;
+    };
+    let kind = NSString::from_str("public.utf8-plain-text");
+    let text = NSString::from_str(text);
+    // SAFETY: NSPasteboard's documented `generalPasteboard`,
+    // `clearContents` and `setString:forType:`.
+    unsafe {
+        let board: Retained<AnyObject> = msg_send![class, generalPasteboard];
+        let _: isize = msg_send![&*board, clearContents];
+        let _: bool = msg_send![&*board, setString: &*text, forType: &*kind];
+    }
+}
+
 /// Put the window's backing store in sRGB, the space skin colours are
 /// authored in. Pairs with [`tag_frame_srgb`].
 ///

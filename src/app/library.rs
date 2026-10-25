@@ -437,6 +437,21 @@ impl LibraryState {
         }
     }
 
+    /// The file at `path` has new tags: read them again, if it is in the
+    /// library.
+    pub(crate) fn refresh_file(&mut self, path: &std::path::Path) {
+        if !self.tracks.iter().any(|t| t.info.path == path) {
+            return;
+        }
+        let info = lantern_library::tags::read(path);
+        if let Some(db) = &mut self.db
+            && let Err(e) = db.upsert(&[info], lantern_library::now())
+        {
+            eprintln!("could not update the library: {e}");
+        }
+        self.reload();
+    }
+
     /// Rate these tracks, 0 (none) to 5 stars.
     pub(crate) fn rate(&mut self, ids: &[i64], stars: u8) {
         let Some(db) = &self.db else { return };

@@ -39,6 +39,17 @@ const DRAG_START: i32 = 4;
 const EDGE_GRAB: i32 = 3;
 use crate::ui::playlist_window::clock;
 
+/// Where dragged tracks land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drop {
+    /// One of Lantern's playlists in the tree: at its end.
+    LibraryPlaylist(i64),
+    /// The playlist window, before this row.
+    Playlist(usize),
+    /// The main window or the equaliser: the playlist's end.
+    End,
+}
+
 /// What the tree has selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Node {
@@ -57,7 +68,14 @@ struct ScrollHold {
     id: WidgetId,
     part: ScrollPart,
     grab: i32,
+    /// When an arrow or the track next steps again; `None` for the thumb.
+    next: Option<Instant>,
 }
+
+/// Held down, an arrow or the track waits this long, then repeats this
+/// often — about Windows' own pace.
+const REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+const REPEAT_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// A header held down: on a column's edge, resizing it; or on the
 /// column, to sort by it on release or, once it moves, to move it.
@@ -121,6 +139,16 @@ pub(crate) struct LibraryUi {
     filter_scroll: [usize; 2],
     /// For a double-click in a pane: when, which pane, which line.
     filter_click: Option<(Instant, usize, usize)>,
+    /// The last press in the search box, for a double-click.
+    search_click: Option<Instant>,
+    /// What an input method is composing, not yet typed.
+    preedit: Option<String>,
+    /// While tracks are dragged over a playlist in the tree: that one.
+    drop_node: Option<Node>,
+    /// Under the Playlists heading: the playlists listed, as their ids,
+    /// and the one picked.
+    listed: Vec<i64>,
+    listed_pick: Option<i64>,
 }
 
 impl Default for LibraryUi {
@@ -152,11 +180,25 @@ impl Default for LibraryUi {
             filter_totals: [0, 0],
             filter_scroll: [0, 0],
             filter_click: None,
+            search_click: None,
+            preedit: None,
+            drop_node: None,
+            listed: Vec::new(),
+            listed_pick: None,
         }
     }
 }
 
 impl LibraryUi {
+    /// Lines in the list: tracks, or under the Playlists heading, playlists.
+    fn list_len(&self) -> usize {
+        if self.node == Node::Playlists {
+            self.listed.len()
+        } else {
+            self.rows.len()
+        }
+    }
+
     /// Whether the view has the Artist and Album panes: all audio does.
     fn has_filters(&self) -> bool {
         matches!(self.node, Node::LocalMedia | Node::View(View::Audio))
@@ -327,7 +369,7 @@ impl App {
                     label: renaming.map_or_else(|| label.to_string(), |n| n.text.clone()),
                     depth,
                     expander,
-                    selected: ui.node == node,
+                    selected: ui.node == node || ui.drop_node == Some(node),
                     editing: renaming.map(|n| n.caret),
                 },
             )
@@ -372,7 +414,22 @@ impl App {
                     rows
                 }
             }
-            Node::Playlists => Vec::new(),
+            Node::Playlists => {
+                // The list lists the playlists: those whose names match.
+                let terms = view::terms(&ui.search.text);
+                let listed: Vec<i64> = self
+                    .library
+                    .playlists
+                    .iter()
+                    .filter(|p| {
+                        let name = p.name.to_lowercase();
+                        terms.iter().all(|t| name.contains(t.as_str()))
+                    })
+                    .map(|p| p.id)
+                    .collect();
+                self.lib_ui.listed = listed;
+                Vec::new()
+            }
             Node::Playlist(id) => {
                 let index: HashMap<i64, usize> =
                     tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
@@ -478,7 +535,7 @@ impl App {
             visible,
             pressed: hold(lw::TREE_SCROLL),
         };
-        let (position, visible) = bar(ui.list_scroll, ui.rows.len(), list_shown);
+        let (position, visible) = bar(ui.list_scroll, ui.list_len(), list_shown);
         let list_scroll = ScrollState {
             position,
             visible,
@@ -510,6 +567,12 @@ impl App {
                 }
             })
             .collect();
+        let listing = ui.node == Node::Playlists;
+        let rows = if listing {
+            self.playlist_listing_rows(list_shown)
+        } else {
+            rows
+        };
         let total: f64 = ui
             .rows
             .iter()
@@ -520,6 +583,10 @@ impl App {
             None if self.library.tracks.is_empty() => {
                 "Add a folder, or import Apple Music, from the Library button".into()
             }
+            None if listing => {
+                let n = ui.listed.len();
+                format!("{n} {}", if n == 1 { "playlist" } else { "playlists" })
+            }
             None => {
                 let n = ui.rows.len();
                 format!(
@@ -528,6 +595,17 @@ impl App {
                     clock(total)
                 )
             }
+        };
+        // Text an input method is composing shows at the caret, underlined.
+        let (search_shown, caret_shown, search_marked) = match &ui.preedit {
+            Some(marked) if ui.renaming.is_none() => {
+                let mut chars: Vec<char> = ui.search.text.chars().collect();
+                let at = ui.search.caret.min(chars.len());
+                let n = marked.chars().count();
+                chars.splice(at..at, marked.chars());
+                (chars.into_iter().collect(), at + n, Some((at, at + n)))
+            }
+            _ => (ui.search.text.clone(), ui.search.caret, None),
         };
         let sort = match ui.node {
             Node::View(v) => Some(ui.sort.unwrap_or_else(|| v.default_sort())),
@@ -545,8 +623,10 @@ impl App {
                 .map(|(_, r)| r)
                 .collect(),
             tree_scroll,
-            search: ui.search.text.clone(),
-            caret: (focused && ui.renaming.is_none()).then_some(ui.search.caret),
+            search: search_shown,
+            caret: (focused && ui.renaming.is_none()).then_some(caret_shown),
+            search_selection: ui.search.selection(),
+            search_marked,
             sort,
             rows,
             list_scroll,
@@ -556,6 +636,7 @@ impl App {
             tree_width: ui.tree_width,
             column_drop: self.column_drop_x(),
             filters: self.filter_view(),
+            listing_playlists: listing,
             status,
         }
     }
@@ -601,6 +682,60 @@ impl App {
         })
     }
 
+    /// The playlists listed under the Playlists heading, the rows in view:
+    /// name, how many tracks, how long, and where from.
+    fn playlist_listing_rows(&self, shown: usize) -> Vec<ListRow> {
+        let ui = &self.lib_ui;
+        let length: HashMap<i64, f64> = self
+            .library
+            .tracks
+            .iter()
+            .map(|t| (t.id, t.info.duration_secs.unwrap_or(0.0)))
+            .collect();
+        ui.listed
+            .iter()
+            .skip(ui.list_scroll)
+            .take(shown)
+            .filter_map(|&id| self.library.playlist(id))
+            .map(|p| {
+                let secs: f64 = p.tracks.iter().filter_map(|t| length.get(t)).sum();
+                let from = if p.source == lantern_library::OWN {
+                    "Lantern"
+                } else {
+                    "Apple Music"
+                };
+                ListRow {
+                    cells: vec![
+                        p.name.clone(),
+                        p.tracks.len().to_string(),
+                        clock(secs),
+                        from.to_string(),
+                    ],
+                    selected: ui.listed_pick == Some(p.id),
+                }
+            })
+            .collect()
+    }
+
+    /// A click on a listed playlist: pick it; a double-click opens it.
+    fn click_listed_playlist(&mut self, local_y: i32) {
+        let row = (local_y / ROW_HEIGHT as i32).max(0) as usize + self.lib_ui.list_scroll;
+        let Some(&id) = self.lib_ui.listed.get(row) else {
+            self.lib_ui.listed_pick = None;
+            return;
+        };
+        let now = Instant::now();
+        let double = self
+            .lib_ui
+            .last_click
+            .is_some_and(|(t, r)| r == row && now.duration_since(t) < DOUBLE_CLICK);
+        self.lib_ui.last_click = Some((now, row));
+        self.lib_ui.listed_pick = Some(id);
+        if double {
+            self.show_library_playlist(id);
+        }
+    }
+
     // -- Pointer ------------------------------------------------------------
 
     /// The pointer went down on `id` at logical `(x, y)`.
@@ -638,9 +773,23 @@ impl App {
                 }
             }
             lw::SEARCH => {
-                let local = x - l.search.x - 2;
-                self.lib_ui.search.caret = self.caret_at(local);
+                // Click: the caret; Shift-click: select to there;
+                // double-click: select it all.
+                let at = self.caret_at(x - l.search.x - 2);
+                let now = Instant::now();
+                let double = self
+                    .lib_ui
+                    .search_click
+                    .is_some_and(|t| now.duration_since(t) < DOUBLE_CLICK);
+                self.lib_ui.search_click = Some(now);
+                if double {
+                    self.lib_ui.search.select_all();
+                } else {
+                    self.lib_ui.search.move_to(at, self.modifiers.shift_key());
+                }
             }
+            // The playlists' own columns stay as they are.
+            lw::HEADER if self.lib_ui.node == Node::Playlists => {}
             lw::HEADER => {
                 // On an edge it resizes the column to its left; elsewhere it
                 // takes hold of the column.
@@ -668,7 +817,13 @@ impl App {
                 }
                 self.lib_ui.header = hold;
             }
+            lw::LIST if self.lib_ui.node == Node::Playlists => {
+                self.click_listed_playlist(y - l.list.y);
+            }
             lw::LIST => {
+                if self.click_library_stars(x, y - l.list.y) {
+                    return;
+                }
                 if !self.click_library_row(y - l.list.y) {
                     self.lib_ui.list_drag = Some(((x, y), false));
                 }
@@ -732,17 +887,36 @@ impl App {
     }
 
     fn caret_at(&self, local_x: i32) -> usize {
-        let Some(font) = &self.font else { return 0 };
-        let style = crate::ui::font::TextStyle {
-            px: 9.0,
-            spacing: 0.5,
+        self.font.as_ref().map_or(0, |font| {
+            crate::ui::gen_controls::caret_at(font, &self.lib_ui.search.text, local_x)
+        })
+    }
+
+    /// A click on the Rating column's stars: rates that track — or, if it
+    /// already has just that many, clears its rating. True if it was one.
+    fn click_library_stars(&mut self, x: i32, local_y: i32) -> bool {
+        let l = self.lib_layout();
+        let mut left = l.list.x - self.lib_ui.columns_offset as i32;
+        let mut cell = None;
+        for &(index, width) in &self.lib_ui.columns {
+            if x >= left && x < left + width as i32 {
+                cell = (ALL_COLUMNS[index].0 == Column::Rating).then_some(left);
+                break;
+            }
+            left += width as i32;
+        }
+        let Some(left) = cell else { return false };
+        let row = (local_y / ROW_HEIGHT as i32).max(0) as usize + self.lib_ui.list_scroll;
+        let Some(&i) = self.lib_ui.rows.get(row) else {
+            return false;
         };
-        // Before the first character whose middle is past the pointer.
-        let chars: Vec<char> = self.lib_ui.search.text.chars().collect();
-        let width = |n: usize| font.width(&chars[..n].iter().collect::<String>(), style);
-        (0..chars.len())
-            .find(|&n| (local_x as f32) < (width(n) + width(n + 1)) / 2.0)
-            .unwrap_or(chars.len())
+        let track = &self.library.tracks[i];
+        let stars = lw::star_at(x - left);
+        let stars = if track.rating == stars { 0 } else { stars };
+        let id = track.id;
+        self.library.rate(&[id], stars);
+        self.request_redraw(PaneKind::Library);
+        true
     }
 
     /// A click in the list, `local_y` below its top. True if it was a
@@ -799,6 +973,14 @@ impl App {
         match id {
             lw::HEADER => self.drag_library_header(x),
             lw::LIST => self.drag_library_tracks(x, y),
+            lw::SEARCH => {
+                let x0 = self.lib_layout().search.x;
+                let at = self.caret_at(x - x0 - 2);
+                if at != self.lib_ui.search.caret {
+                    self.lib_ui.search.move_to(at, true);
+                    self.request_redraw(PaneKind::Library);
+                }
+            }
             lw::DIVIDER => {
                 if let Some(grab) = self.lib_ui.divider_grab {
                     let c = lw::content_area(self.library_size.0, self.library_size.1);
@@ -896,6 +1078,9 @@ impl App {
                 p.window.set_cursor(winit::window::CursorIcon::Copy);
             }
         }
+        if self.lib_ui.list_drag.is_some_and(|d| d.1) {
+            self.mark_drop();
+        }
     }
 
     /// Something in the window let go of.
@@ -943,67 +1128,144 @@ impl App {
     /// Tracks dragged out of the list were let go: onto the playlist, they
     /// go in where they landed; onto the main window or the equaliser, at
     /// the end.
-    fn drop_library_tracks(&mut self) {
-        let Some((gx, gy)) = self.global_cursor(PaneKind::Library) else {
-            return;
-        };
-        // Onto one of Lantern's playlists in the tree: added to its end.
+    /// Where dragged tracks would land if let go now.
+    fn drop_target(&self) -> Option<Drop> {
+        // Onto one of Lantern's playlists in the tree.
         if let Some((x, y)) = self.pane(PaneKind::Library).and_then(|p| p.input.cursor)
             && self.lib_layout().tree.contains(x, y)
         {
-            if let Some(Node::Playlist(id)) = self.tree_node_at(y) {
-                self.send_selection_to_playlist(id);
-            }
-            return;
+            return match self.tree_node_at(y) {
+                Some(Node::Playlist(id)) if self.library.is_own(id) => {
+                    Some(Drop::LibraryPlaylist(id))
+                }
+                _ => None,
+            };
         }
+        let (gx, gy) = self.global_cursor(PaneKind::Library)?;
         let (kinds, rects, shown) = self.frames();
-        let target = (0..kinds.len()).find(|&i| {
+        let i = (0..kinds.len()).find(|&i| {
             let r = rects[i];
             let inside = gx >= r.x && gx < r.x + r.w && gy >= r.y && gy < r.y + r.h;
             shown[i] && kinds[i] != PaneKind::Library && inside
-        });
-        let Some(i) = target else { return };
-        let entries = self.library_selection_entries();
-        if entries.is_empty() {
-            return;
-        }
-        if kinds[i] == PaneKind::Playlist
-            && !self.pane(PaneKind::Playlist).is_some_and(|p| p.shaded)
-        {
-            let local_y = (gy - rects[i].y) as i32;
-            let at = self.playlist_row_at(local_y);
-            self.insert_entries(at, entries);
+        })?;
+        let shaded = self.pane(PaneKind::Playlist).is_some_and(|p| p.shaded);
+        Some(if kinds[i] == PaneKind::Playlist && !shaded {
+            Drop::Playlist(self.playlist_row_at((gy - rects[i].y) as i32))
         } else {
-            self.add_entries(entries);
+            Drop::End
+        })
+    }
+
+    /// Show where dragged tracks would land: a line in the playlist, or the
+    /// playlist in the tree picked out.
+    fn mark_drop(&mut self) {
+        let target = self.drop_target();
+        let row = match target {
+            Some(Drop::Playlist(row)) => Some(row),
+            _ => None,
+        };
+        let node = match target {
+            Some(Drop::LibraryPlaylist(id)) => Some(Node::Playlist(id)),
+            _ => None,
+        };
+        if row != self.pl_drop {
+            self.pl_drop = row;
+            self.request_redraw(PaneKind::Playlist);
+        }
+        if node != self.lib_ui.drop_node {
+            self.lib_ui.drop_node = node;
+            self.request_redraw(PaneKind::Library);
         }
     }
 
-    pub(super) fn drag_library_scroll(&mut self, id: WidgetId, x: i32, y: i32) {
+    /// Tracks dragged out of the list were let go.
+    fn drop_library_tracks(&mut self) {
+        let target = self.drop_target();
+        self.pl_drop = None;
+        self.lib_ui.drop_node = None;
+        self.request_redraw(PaneKind::Playlist);
+        match target {
+            Some(Drop::LibraryPlaylist(id)) => self.send_selection_to_playlist(id),
+            Some(Drop::Playlist(at)) => {
+                let entries = self.library_selection_entries();
+                self.insert_entries(at, entries);
+            }
+            Some(Drop::End) => {
+                let entries = self.library_selection_entries();
+                self.add_entries(entries);
+            }
+            None => {}
+        }
+    }
+
+    /// A scrollbar's geometry and what it scrolls: its rect, whether it is
+    /// vertical, how many lines (or pixels) there are and are shown, and
+    /// the offset now.
+    fn scroll_info(
+        &self,
+        id: WidgetId,
+    ) -> Option<(crate::ui::geometry::Rect, bool, usize, usize, usize)> {
         let l = self.lib_layout();
         let (tree_shown, list_shown) = self.lib_visible();
+        let ui = &self.lib_ui;
         let pane = usize::from(id == lw::ALBUMS_SCROLL);
-        let filter_shown = self.filter_visible();
-        let (rect, vertical, total, shown) = match id {
-            lw::TREE_SCROLL => (l.tree_scroll, true, self.tree_items().len(), tree_shown),
-            lw::LIST_SCROLL => (l.list_scroll, true, self.lib_ui.rows.len(), list_shown),
+        Some(match id {
+            lw::TREE_SCROLL => (
+                l.tree_scroll,
+                true,
+                self.tree_items().len(),
+                tree_shown,
+                ui.tree_scroll,
+            ),
+            lw::LIST_SCROLL => (
+                l.list_scroll,
+                true,
+                ui.list_len(),
+                list_shown,
+                ui.list_scroll,
+            ),
             lw::ARTISTS_SCROLL | lw::ALBUMS_SCROLL => {
-                let Some(f) = l.filters else { return };
-                let lines = self.lib_ui.filter_rows[pane].len() + 1;
-                (f.scrolls[pane], true, lines, filter_shown)
+                let f = l.filters?;
+                let lines = ui.filter_rows[pane].len() + 1;
+                (
+                    f.scrolls[pane],
+                    true,
+                    lines,
+                    self.filter_visible(),
+                    ui.filter_scroll[pane],
+                )
             }
             _ => (
                 l.list_hscroll,
                 false,
-                columns_width(&self.lib_ui.columns) as usize,
+                columns_width(&ui.columns) as usize,
                 l.list.w as usize,
+                ui.columns_offset as usize,
             ),
-        };
-        let offset = match id {
-            lw::TREE_SCROLL => self.lib_ui.tree_scroll,
-            lw::LIST_SCROLL => self.lib_ui.list_scroll,
-            lw::ARTISTS_SCROLL | lw::ALBUMS_SCROLL => self.lib_ui.filter_scroll[pane],
-            _ => self.lib_ui.columns_offset as usize,
-        };
+        })
+    }
+
+    fn set_scroll(&mut self, id: WidgetId, to: usize) {
+        let ui = &mut self.lib_ui;
+        match id {
+            lw::TREE_SCROLL => ui.tree_scroll = to,
+            lw::LIST_SCROLL => ui.list_scroll = to,
+            lw::ARTISTS_SCROLL => ui.filter_scroll[0] = to,
+            lw::ALBUMS_SCROLL => ui.filter_scroll[1] = to,
+            _ => ui.columns_offset = to as u32,
+        }
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// What part of scrollbar `id` the pointer at `(x, y)` is on, and the
+    /// state it is drawn in.
+    fn scroll_part_at(
+        &self,
+        id: WidgetId,
+        x: i32,
+        y: i32,
+    ) -> Option<(ScrollPart, i32, ScrollState, u32)> {
+        let (rect, vertical, total, shown, offset) = self.scroll_info(id)?;
         let (len, along) = if vertical {
             (rect.h, y - rect.y)
         } else {
@@ -1015,42 +1277,82 @@ impl App {
             visible,
             pressed: None,
         };
-        let max = total.saturating_sub(shown);
+        Some((scroll_hit(len, &state, along), along, state, len))
+    }
+
+    /// One step of an arrow or the track, as a press does and holding
+    /// repeats.
+    fn scroll_step(&mut self, id: WidgetId, part: ScrollPart) {
+        let Some((_, vertical, total, shown, offset)) = self.scroll_info(id) else {
+            return;
+        };
         // Rows step by one; the columns, by a little more.
         let step = if vertical { 1 } else { 20 };
-        let new = match self.lib_ui.hold {
+        let new = match part {
+            ScrollPart::Back => offset.saturating_sub(step),
+            ScrollPart::Forward => offset + step,
+            ScrollPart::PageBack => offset.saturating_sub(shown),
+            ScrollPart::PageForward => offset + shown,
+            ScrollPart::Thumb => offset,
+        };
+        self.set_scroll(id, new.min(total.saturating_sub(shown)));
+    }
+
+    pub(super) fn drag_library_scroll(&mut self, id: WidgetId, x: i32, y: i32) {
+        let Some((part, along, state, len)) = self.scroll_part_at(id, x, y) else {
+            return;
+        };
+        match self.lib_ui.hold {
             None => {
-                let part = scroll_hit(len, &state, along);
                 let grab = match scroll_geometry(len, &state).2 {
                     Some((at, _)) => along - at as i32,
                     None => 0,
                 };
-                self.lib_ui.hold = Some(ScrollHold { id, part, grab });
-                match part {
-                    ScrollPart::Back => offset.saturating_sub(step),
-                    ScrollPart::Forward => offset + step,
-                    ScrollPart::PageBack => offset.saturating_sub(shown),
-                    ScrollPart::PageForward => offset + shown,
-                    ScrollPart::Thumb => offset,
-                }
+                let next = (part != ScrollPart::Thumb).then(|| Instant::now() + REPEAT_DELAY);
+                self.lib_ui.hold = Some(ScrollHold {
+                    id,
+                    part,
+                    grab,
+                    next,
+                });
+                self.scroll_step(id, part);
             }
             Some(hold) if hold.part == ScrollPart::Thumb => {
+                let Some((_, _, total, shown, _)) = self.scroll_info(id) else {
+                    return;
+                };
+                let max = total.saturating_sub(shown);
                 let (_, track, thumb) = scroll_geometry(len, &state);
                 let thumb = thumb.map_or(0, |t| t.1);
                 let travel = track.saturating_sub(thumb).max(1) as f32;
                 let at = (along - hold.grab - ARROW as i32) as f32 / travel;
-                (at.clamp(0.0, 1.0) * max as f32).round() as usize
+                self.set_scroll(id, (at.clamp(0.0, 1.0) * max as f32).round() as usize);
             }
-            Some(_) => offset,
-        };
-        let new = new.min(max);
-        match id {
-            lw::TREE_SCROLL => self.lib_ui.tree_scroll = new,
-            lw::LIST_SCROLL => self.lib_ui.list_scroll = new,
-            lw::ARTISTS_SCROLL | lw::ALBUMS_SCROLL => self.lib_ui.filter_scroll[pane] = new,
-            _ => self.lib_ui.columns_offset = new as u32,
+            Some(_) => {}
         }
-        self.request_redraw(PaneKind::Library);
+    }
+
+    /// While an arrow or the track is held: step again when due, as long as
+    /// the pointer is still on it — the track stops once the thumb reaches
+    /// the pointer.
+    pub(super) fn repeat_library_scroll(&mut self, now: Instant) {
+        let Some(hold) = self.lib_ui.hold else { return };
+        if hold.next.is_none_or(|t| now < t) {
+            return;
+        }
+        let cursor = self.pane(PaneKind::Library).and_then(|p| p.input.cursor);
+        let here = cursor.and_then(|(x, y)| self.scroll_part_at(hold.id, x, y));
+        if here.is_some_and(|(part, ..)| part == hold.part) {
+            self.scroll_step(hold.id, hold.part);
+        }
+        if let Some(h) = &mut self.lib_ui.hold {
+            h.next = Some(now + REPEAT_EVERY);
+        }
+    }
+
+    /// How soon a held scrollbar next repeats, if one is held.
+    pub(super) fn library_repeat_due(&self) -> Option<Instant> {
+        self.lib_ui.hold.and_then(|h| h.next)
     }
 
     pub(super) fn release_library_scroll(&mut self) {
@@ -1093,7 +1395,7 @@ impl App {
             let n = self.tree_items().len();
             self.lib_ui.tree_scroll = by(self.lib_ui.tree_scroll, dy, n.saturating_sub(tree_shown));
         } else {
-            ui.list_scroll = by(ui.list_scroll, dy, ui.rows.len().saturating_sub(list_shown));
+            ui.list_scroll = by(ui.list_scroll, dy, ui.list_len().saturating_sub(list_shown));
             let max = columns_w.saturating_sub(l.list.w as usize);
             ui.columns_offset = by(ui.columns_offset as usize, dx, max) as u32;
         }
@@ -1214,6 +1516,10 @@ impl App {
             return;
         }
         self.library.delete_playlist(id);
+        if self.lib_ui.listed_pick == Some(id) {
+            self.lib_ui.listed_pick = None;
+        }
+        self.lib_ui.built = None;
         if self.lib_ui.node == Node::Playlist(id) {
             self.lib_ui.node = Node::Playlists;
             self.requery();
@@ -1229,10 +1535,12 @@ impl App {
         }
     }
 
-    /// The node the tree has selected, if a playlist.
+    /// The playlist the tree has selected — or, under the Playlists
+    /// heading, the one picked in the list.
     pub(super) fn playlist_selected_in_tree(&self) -> Option<i64> {
         match self.lib_ui.node {
             Node::Playlist(id) => Some(id),
+            Node::Playlists => self.lib_ui.listed_pick,
             _ => None,
         }
     }
@@ -1370,7 +1678,14 @@ impl App {
             return MenuKind::Library;
         };
         let l = self.lib_layout();
-        if l.list.contains(x, y) {
+        if l.list.contains(x, y) && self.lib_ui.node == Node::Playlists {
+            // A listed playlist: pick it, and offer what the tree would.
+            let row =
+                ((y - l.list.y) / ROW_HEIGHT as i32).max(0) as usize + self.lib_ui.list_scroll;
+            self.lib_ui.listed_pick = self.lib_ui.listed.get(row).copied();
+            self.request_redraw(PaneKind::Library);
+            MenuKind::LibraryTree
+        } else if l.list.contains(x, y) {
             self.select_library_row_at(y - l.list.y);
             MenuKind::LibraryTracks
         } else if l.tree.contains(x, y) {
@@ -1421,6 +1736,15 @@ impl App {
             .collect();
         self.library.forget(&paths);
         self.lib_ui.selected.clear();
+    }
+
+    /// File Info for the first selected track.
+    pub(super) fn library_selection_info(&mut self) {
+        let first = self.library_selection().into_iter().next();
+        if let Some(i) = first {
+            let path = self.library.tracks[i].info.path.clone();
+            self.open_info(path);
+        }
     }
 
     /// Show the first selected track's file in Finder.
@@ -1479,6 +1803,13 @@ impl App {
     /// Play (replacing the playlist) or enqueue the selection, or every row
     /// if none is selected.
     pub(super) fn send_library_selection(&mut self, replace: bool) {
+        // Under the Playlists heading, the playlist picked.
+        if self.lib_ui.node == Node::Playlists {
+            if let Some(id) = self.lib_ui.listed_pick {
+                self.send_library_playlist(id, replace);
+            }
+            return;
+        }
         let chosen = self.library_selection_entries();
         if chosen.is_empty() {
             return;
@@ -1563,6 +1894,60 @@ impl App {
         }
         self.request_redraw(PaneKind::Library);
         true
+    }
+
+    /// An input method's doing, while the library has the keyboard: text
+    /// being composed shows in the search box; text settled on is typed —
+    /// into a playlist's name if one is being renamed.
+    pub(super) fn library_ime(&mut self, ime: winit::event::Ime) {
+        use winit::event::Ime;
+        match ime {
+            Ime::Preedit(text, _) => {
+                self.lib_ui.preedit = (!text.is_empty()).then_some(text);
+            }
+            Ime::Commit(text) => {
+                self.lib_ui.preedit = None;
+                if let Some((_, name)) = &mut self.lib_ui.renaming {
+                    name.insert(&text);
+                } else {
+                    let mut search = self.lib_ui.search.clone();
+                    search.insert(&text);
+                    self.set_search(search);
+                }
+            }
+            Ime::Enabled | Ime::Disabled => self.lib_ui.preedit = None,
+        }
+        self.place_ime_window();
+        self.request_redraw(PaneKind::Library);
+    }
+
+    /// Tell the input method where the caret is, so its candidate window
+    /// opens beside it.
+    fn place_ime_window(&self) {
+        let l = self.lib_layout();
+        let x = l.search.x + 2 + (self.caret_at_x() as i32);
+        let at = winit::dpi::LogicalPosition::new(f64::from(x), f64::from(l.search.y));
+        let size = winit::dpi::LogicalSize::new(1.0, f64::from(l.search.h));
+        if let Some(p) = self.pane(PaneKind::Library) {
+            p.window.set_ime_cursor_area(at, size);
+        }
+    }
+
+    /// How far into the search box the caret is, in pixels.
+    fn caret_at_x(&self) -> f32 {
+        let Some(font) = &self.font else { return 0.0 };
+        let style = crate::ui::font::TextStyle {
+            px: 9.0,
+            spacing: 0.5,
+        };
+        let before: String = self
+            .lib_ui
+            .search
+            .text
+            .chars()
+            .take(self.lib_ui.search.caret)
+            .collect();
+        font.width(&before, style)
     }
 
     /// Up or down a row from the last one clicked, selecting it alone and

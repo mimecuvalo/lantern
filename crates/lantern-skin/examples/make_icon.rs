@@ -5,8 +5,10 @@
 //!
 //! Drawn on a 32x32 grid and scaled up in whole steps, so it stays crisp at
 //! every size; 16px has a drawing of its own, as a scaled-down lantern would
-//! blur. The rounded square follows the macOS icon grid: 824 of the 1024
-//! points, centred.
+//! blur. The sky fills a plain square, cut to the macOS icon grid's rounded
+//! square, 824 of the 1024 points, centred, with smooth corners: macOS 26
+//! sets an icon that doesn't fill that shape, as stepped pixel corners
+//! don't, small on a grey plate.
 //!
 //! Output is deterministic. With `--preview <dir>`, it also writes the
 //! sizes there as PNGs.
@@ -108,7 +110,7 @@ const SMALL_HURRICANE: [&str; 11] = [
 
 /// The 32-cell drawing, from 32px up.
 fn big() -> Grid {
-    let mut g = night_sky(32, 3, 28, 4);
+    let mut g = night_sky(32, 3, 28);
     for (x, y) in [(5, 15), (27, 13), (7, 26), (24, 26)] {
         g.set(x, y, STAR);
     }
@@ -123,19 +125,20 @@ fn big() -> Grid {
 
 /// The 16-cell drawing, for 16px.
 fn small() -> Grid {
-    let mut g = night_sky(16, 1, 14, 2);
+    let mut g = night_sky(16, 1, 14);
     g.set(2, 4, STAR);
     g.set(13, 3, STAR);
     g.art(3, 2, &SMALL_HURRICANE);
     g
 }
 
-/// Night's sky in the rounded square from `lo` to `hi`: bands from
-/// near-black at the top to deep blue below, blended with the dither as
-/// the skin's own is, and a faint rim of light along the top.
-fn night_sky(n: i32, lo: i32, hi: i32, radius: i32) -> Grid {
+/// Night's sky in the square from `lo` to `hi`, a little past the icon
+/// grid's so the mask cuts it: bands from near-black at the top to deep
+/// blue below, blended with the dither as the skin's own is, and a faint
+/// rim of light along the top.
+fn night_sky(n: i32, lo: i32, hi: i32) -> Grid {
     let mut g = Grid::new(n);
-    g.square(lo, hi, radius);
+    g.square(lo, hi);
     for y in lo..=hi {
         for x in lo..=hi {
             if g.get(x, y).is_none() {
@@ -229,17 +232,11 @@ impl Grid {
         }
     }
 
-    /// The rounded square from `lo` to `hi` inclusive, corners cut by
-    /// `radius` cells.
-    fn square(&mut self, lo: i32, hi: i32, radius: i32) {
+    /// The square from `lo` to `hi` inclusive.
+    fn square(&mut self, lo: i32, hi: i32) {
         for y in lo..=hi {
             for x in lo..=hi {
-                let cx = (lo + radius - x).max(x - (hi - radius)).max(0);
-                let cy = (lo + radius - y).max(y - (hi - radius)).max(0);
-                // Inside the corner's circle, measured from cell centres.
-                if (cx * cx + cy * cy) as f32 <= (radius as f32 + 0.3).powi(2) {
-                    self.set(x, y, S0);
-                }
+                self.set(x, y, S0);
             }
         }
     }
@@ -260,10 +257,30 @@ impl Grid {
 /// The image for a `size` in pixels: the small drawing at 16, the big one
 /// from 32 up.
 fn render(size: u32) -> RgbaImage {
-    if size < 32 {
+    let mut img = if size < 32 {
         small().scaled(size)
     } else {
         big().scaled(size)
+    };
+    mask(&mut img);
+    img
+}
+
+/// Cut `img` to the macOS icon grid's rounded square: 824 of 1024 wide,
+/// centred, corners of radius 185, edges antialiased.
+fn mask(img: &mut RgbaImage) {
+    let size = img.width() as f32;
+    let half = size * 824.0 / 1024.0 / 2.0;
+    let radius = size * 185.0 / 1024.0;
+    let centre = size / 2.0;
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        // Distance from the pixel's centre to the shape's edge, outside
+        // positive.
+        let qx = (x as f32 + 0.5 - centre).abs() - (half - radius);
+        let qy = (y as f32 + 0.5 - centre).abs() - (half - radius);
+        let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
+        let cover = (0.5 - d).clamp(0.0, 1.0);
+        px[3] = (f32::from(px[3]) * cover).round() as u8;
     }
 }
 

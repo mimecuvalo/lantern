@@ -12,6 +12,15 @@ the project, kept here because the git history itself was then cleared.
 
 ### Added
 
+- **Chroma**, a skin built on chromostereopsis: pure red and pure blue on
+  black, so the red seems to float in front of the blue. The frame and the
+  controls are red line-work; behind them a blue sunburst of rays and rings
+  bursts from the lantern. A pressed button's face drops back into blue
+  behind its red edge, the visualiser's bars are red where loud and blue
+  where quiet, and EQ bands turn from blue when cut to red when boosted.
+  Docked below, the EQ reads as part of the main window: the burst carries
+  on across it, one outer rail runs down both, and the frame's corner
+  blocks close the pair at the EQ's foot. In `assets/skins/lantern-chroma.wsz`.
 - **An app icon**: a pixel-art hurricane lantern, lit, in Night's starry
   sky, its glass rim-lit like Night's controls. Original art, drawn in code
   (`cargo run -p lantern-skin --example make_icon`) into
@@ -138,6 +147,9 @@ the project, kept here because the git history itself was then cleared.
 
 ### Fixed
 
+- **The menu bar says Lantern, not lantern**, when run straight from
+  `cargo run`: the executable is now `Lantern`, since outside an app bundle
+  macOS names the app after it (so `cargo test --bin Lantern`).
 - Colours were oversaturated on wide-gamut displays; windows are now
   colour-managed as sRGB, using less CPU than before.
 - The spectrum analyser now moves like Winamp's: bars leap and drop away

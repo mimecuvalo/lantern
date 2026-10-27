@@ -10,7 +10,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Lantern</string>
 	<key>CFBundleExecutable</key>
-	<string>lantern</string>
+	<string>Lantern</string>
 	<!-- Drawn by `cargo run -p lantern-skin --example make_icon`. -->
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>

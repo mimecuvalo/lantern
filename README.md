@@ -37,7 +37,7 @@ cargo run --release -- --skin path/to/skin.wsz    # choose a skin
 
 **Skins.** Lantern comes with its own skins, original artwork drawn in code
 (see [`docs/legal.md`](docs/legal.md)): Night, built in, and more in
-`assets/skins/` — Aurora, Dusk, Fireflies, Cave, Temple, Wireframe. It loads any
+`assets/skins/` — Aurora, Dusk, Fireflies, Cave, Temple, Wireframe, Chroma. It loads any
 classic Winamp skin too: Get More Skins… in the menu opens
 [skins.webamp.org](https://skins.webamp.org/). Pass a skin with `--skin`, or load one at runtime from the main menu.
 
@@ -98,7 +98,7 @@ revisit quietly.
 cargo build && cargo test --workspace
 cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p lantern-audio --example play -- track.mp3 5     # headless audio check
-LANTERN_RENDER_DUMP=/tmp cargo test --bin lantern render        # windows as PNGs
+LANTERN_RENDER_DUMP=/tmp cargo test --bin Lantern render        # windows as PNGs
 cargo run -p lantern-skin --example make_fixture            # regenerate the test skin
 ```
 

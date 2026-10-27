@@ -38,7 +38,7 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 APP="$PROJECT_DIR/target/$PROFILE/Lantern.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "target/$PROFILE/lantern" "$APP/Contents/MacOS/lantern"
+cp "target/$PROFILE/Lantern" "$APP/Contents/MacOS/Lantern"
 cp macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 sed "s/@VERSION@/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP" >/dev/null 2>&1

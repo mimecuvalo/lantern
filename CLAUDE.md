@@ -115,7 +115,7 @@ skin: the fixture, the built-in, Lantern's themes, and any local skins in
 `skins/`), which is the practical way to check sprite work:
 
 ```bash
-LANTERN_RENDER_DUMP=/tmp cargo test --bin lantern render -- --nocapture   # every window
+LANTERN_RENDER_DUMP=/tmp cargo test --bin Lantern render -- --nocapture   # every window
 ```
 
 ### Test fixtures

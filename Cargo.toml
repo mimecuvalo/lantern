@@ -21,6 +21,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Capitalised, because outside Lantern.app macOS names the app in the menu
+# bar after its executable.
+[[bin]]
+name = "Lantern"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 

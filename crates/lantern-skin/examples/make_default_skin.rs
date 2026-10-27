@@ -70,6 +70,10 @@ enum Style {
     Night,
     /// Flat navy, a grid, glowing outlines.
     Wireframe,
+    /// Pure red and blue on black, for chromostereopsis: red floats in
+    /// front of blue, so what is raised is red and what is pressed or quiet
+    /// sinks into blue.
+    Chroma,
 }
 
 /// Variations on the night sky: what is in the air, on the ground, and who
@@ -102,7 +106,7 @@ struct Theme {
     scanlines: bool,
 }
 
-const THEMES: [Theme; 7] = [
+const THEMES: [Theme; 8] = [
     // Open night sky: no stone at all; stars, a moon, glass controls. The
     // default, built in.
     Theme {
@@ -342,6 +346,43 @@ const THEMES: [Theme; 7] = [
         glow: true,
         scanlines: false,
     },
+    // Chromostereopsis: red line-work standing off black, and blue rays
+    // far behind it, bursting from the lantern; pressed buttons, cut EQ
+    // bands and quiet bars fall back into the blue. The EQ docked below
+    // carries on the burst, so the two read as one piece.
+    Theme {
+        name: "chroma",
+        style: Style::Chroma,
+        mood: Mood::Plain,
+        palette: Palette {
+            void: [0, 0, 0],
+            s0: [0, 0, 0],
+            s1: [0, 0, 150],
+            s2: [0, 0, 255],
+            s3: [56, 56, 255],
+            s4: [120, 120, 255],
+            rim: [255, 0, 0],
+            rim_hi: [255, 110, 110],
+            moss0: [0, 0, 84],
+            moss1: [0, 0, 170],
+            moss2: [0, 0, 255],
+            cyan: [255, 0, 0],
+            cyan1: [214, 0, 0],
+            cyan2: [0, 0, 170],
+            cyan3: [0, 0, 84],
+            pink: [0, 0, 255],
+            pink1: [0, 0, 150],
+            amber: [255, 255, 255],
+            amber1: [255, 0, 0],
+            spark: [255, 255, 255],
+            white: [255, 255, 255],
+        },
+        flora: false,
+        sparkles: false,
+        creatures: false,
+        glow: false,
+        scanlines: false,
+    },
 ];
 
 thread_local! {
@@ -507,6 +548,33 @@ impl Canvas {
             Style::Temple => self.ashlar(x, y, w, h, seed),
             Style::Night => self.sky(x, y, w, h, seed),
             Style::Wireframe => self.grid(x, y, w, h),
+            Style::Chroma => self.fill(x, y, w, h, pal().void),
+        }
+    }
+
+    /// Chroma's burst: blue rays and rings from the main window's lantern,
+    /// into a window piece at `(x, y, w, h)` whose top is `below` pixels
+    /// under the main window's top, so the EQ docked beneath carries it on.
+    fn burst(&mut self, x: i32, y: i32, w: i32, h: i32, below: i32) {
+        if theme().style != Style::Chroma {
+            return;
+        }
+        let blue = pal().s2;
+        let (cx, cy) = (x + 259, y + 96 - below);
+        let clip = (x, y, w, h);
+        rays(self, cx, cy, (12.0, 400.0), 36, blue, clip);
+        for r in [24.0f32, 42.0, 66.0, 96.0, 130.0] {
+            let steps = (r * 8.0) as i32;
+            for k in 0..steps {
+                let a = k as f32 / steps as f32 * std::f32::consts::TAU;
+                let (px, py) = (
+                    cx + (r * a.cos()).round() as i32,
+                    cy + (r * a.sin()).round() as i32,
+                );
+                if (x..x + w).contains(&px) && (y..y + h).contains(&py) {
+                    self.px(px, py, blue);
+                }
+            }
         }
     }
 
@@ -691,6 +759,10 @@ impl Canvas {
                 self.brackets(x - 1, y - 1, w + 2, h + 2, p.cyan1);
                 return;
             }
+            Style::Chroma => {
+                self.frame(x - 1, y - 1, w + 2, h + 2, p.rim, p.rim);
+                return;
+            }
             _ => {}
         }
         self.frame(x - 1, y - 1, w + 2, h + 2, pal().s0, pal().s4);
@@ -759,6 +831,13 @@ impl Canvas {
                 if w > 6 && h > 6 {
                     self.frame(x + 2, y + 2, w - 4, h - 4, p.s1, mix(face, p.s4, 0.3));
                 }
+                return;
+            }
+            Style::Chroma => {
+                // Red line-work on black, standing forward; pressed, the
+                // face drops back to blue behind its red edge and glyph.
+                self.fill(x, y, w, h, if pressed { p.s2 } else { p.void });
+                self.frame(x, y, w, h, p.rim, p.rim);
                 return;
             }
             Style::Bricks => {}
@@ -1020,10 +1099,33 @@ const ICON_SHADE: [&str; 5] = ["#####", ".....", "#####", ".....", "....."];
 const ICON_UNSHADE: [&str; 5] = ["#####", "#...#", "#...#", "#...#", "#####"];
 const ICON_CLOSE: [&str; 5] = ["#...#", ".#.#.", "..#..", ".#.#.", "#...#"];
 
-/// A title strip: stone with glowing grooves either side of `label`.
-fn title_strip(c: &mut Canvas, x: i32, y: i32, w: i32, label: &str, active: bool, seed: u32) {
+/// A title strip at `(x, y)`, `w` wide: stone with glowing grooves either
+/// side of `label`. `below` is how far under the main window's top the
+/// strip's window sits, for Chroma's burst.
+fn title_strip(
+    c: &mut Canvas,
+    (x, y, w): (i32, i32, i32),
+    label: &str,
+    active: bool,
+    seed: u32,
+    below: i32,
+) {
     c.backdrop(x, y, w, 14, seed);
-    c.frame(x, y, w, 14, pal().s3, pal().s0);
+    c.burst(x, y, w, 14, below);
+    if theme().style == Style::Chroma {
+        // The frame's outer rail runs on down the sides, unbroken from
+        // the main window into the EQ; only the topmost strip gets a top.
+        let p = pal();
+        for (inset, col) in [(0, p.void), (1, p.rim), (2, p.void)] {
+            c.fill(x + inset, y, 1, 14, col);
+            c.fill(x + w - 1 - inset, y, 1, 14, col);
+            if below == 0 {
+                c.fill(x + inset, y + inset, w - 2 * inset, 1, col);
+            }
+        }
+    } else {
+        c.frame(x, y, w, 14, pal().s3, pal().s0);
+    }
     let line = if active { pal().cyan1 } else { pal().s3 };
     let lw = text_width(label);
     let cx = x + w / 2;
@@ -1066,6 +1168,7 @@ fn menu_button(c: &mut Canvas, x: i32, y: i32, top: &str, bottom: &str, pressed:
 fn main_bmp() -> Canvas {
     let mut c = Canvas::new(275, 116);
     c.backdrop(0, 0, 275, 116, 1);
+    c.burst(0, 0, 275, 116, 0);
     c.frame(0, 0, 275, 116, pal().s3, pal().s0);
 
     // The display: clutter bar column and the screen, cut into the wall.
@@ -1282,6 +1385,7 @@ fn style_decor(c: &mut Canvas, w: i32, h: i32, main: bool) {
                 }
             }
         }
+        Style::Chroma => chroma_frame(c, w, h, main),
         Style::Wireframe => {
             c.brackets(0, 0, w, h, p.cyan);
             // A ruler along the floor.
@@ -1368,6 +1472,129 @@ fn night_scenery(c: &mut Canvas, w: i32, h: i32, main: bool) {
     }
 }
 
+/// Chroma's ornate frame: a double red border on black, red pegs off it;
+/// on the main window, a teeth row along the floor and a black niche of
+/// blue rays for the lantern to hang in front of; on the EQ, dithered
+/// corner blocks at the foot.
+fn chroma_frame(c: &mut Canvas, w: i32, h: i32, main: bool) {
+    let p = pal();
+    for (inset, col) in [(0, p.void), (1, p.rim), (2, p.void), (3, p.rim)] {
+        c.fill(inset, 14, 1, h - 14 - inset, col);
+        c.fill(w - 1 - inset, 14, 1, h - 14 - inset, col);
+        c.fill(inset, h - 1 - inset, w - 2 * inset, 1, col);
+    }
+    for y in (20..h - 14).step_by(8) {
+        c.fill(4, y, 3, 1, p.rim);
+        // Clear of the lantern's niche.
+        if !main || y < 80 {
+            c.fill(w - 7, y, 3, 1, p.rim);
+        }
+    }
+    if main {
+        for x in (14..w - 14).step_by(8) {
+            c.fill(x, h - 7, 1, 3, p.rim);
+        }
+        let (cx, cy) = (259, 96);
+        disc(c, cx, cy, 11, p.void);
+        rays(c, cx, cy, (6.0, 10.5), 12, p.s2, (cx - 11, cy - 11, 23, 23));
+        circle(c, cx, cy, 8.0, p.s2);
+        circle(c, cx, cy, 11.0, p.rim);
+    }
+    const BLOCK: [&str; 9] = [
+        "#########",
+        "#.......#",
+        "#.#.#.#.#",
+        "#..#.#..#",
+        "#.#.#.#.#",
+        "#..#.#..#",
+        "#.#.#.#.#",
+        "#.......#",
+        "#########",
+    ];
+    // Where the main window and the EQ stacked under it end.
+    if !main {
+        for x in [1, w - 10] {
+            c.fill(x, h - 10, 9, 9, p.void);
+            c.art(x, h - 10, &BLOCK, p.rim);
+        }
+    }
+}
+
+fn disc(c: &mut Canvas, cx: i32, cy: i32, r: i32, col: C) {
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if dx * dx + dy * dy <= r * r {
+                c.px(cx + dx, cy + dy, col);
+            }
+        }
+    }
+}
+
+fn circle(c: &mut Canvas, cx: i32, cy: i32, r: f32, col: C) {
+    let steps = (r * 8.0) as i32;
+    for k in 0..steps {
+        let a = k as f32 / steps as f32 * std::f32::consts::TAU;
+        c.px(
+            cx + (r * a.cos()).round() as i32,
+            cy + (r * a.sin()).round() as i32,
+            col,
+        );
+    }
+}
+
+/// `n` rays out from `(cx, cy)`, between the radii `(from, to)`, kept
+/// inside `clip` (x, y, w, h).
+fn rays(
+    c: &mut Canvas,
+    cx: i32,
+    cy: i32,
+    (from, to): (f32, f32),
+    n: usize,
+    col: C,
+    clip: (i32, i32, i32, i32),
+) {
+    let (x0, y0, cw, ch) = clip;
+    for k in 0..n {
+        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+        let mut r = from;
+        while r <= to {
+            let (x, y) = (
+                cx + (r * a.cos()).round() as i32,
+                cy + (r * a.sin()).round() as i32,
+            );
+            if (x0..x0 + cw).contains(&x) && (y0..y0 + ch).contains(&y) {
+                c.px(x, y, col);
+            }
+            r += 0.5;
+        }
+    }
+}
+
+/// Chroma's playlist panel: a blue sunburst over a red sun setting into
+/// red dithered ground.
+fn chroma_panel(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    let p = pal();
+    let (cx, cy) = (x + w / 2, y + h - 4);
+    let clip = (x, y, w, h);
+    rays(c, cx, cy, (7.0, w as f32), 16, p.s2, clip);
+    for r in [10.0, 16.0] {
+        circle(c, cx, cy, r, p.s2);
+    }
+    disc(c, cx, cy, 5, p.rim);
+    for k in 0..4 {
+        let yy = y + h - 4 + k;
+        for xx in x..x + w {
+            let on = match k {
+                0 => (xx + yy).rem_euclid(4) == 0 && yy % 2 == 0,
+                1 => (xx + yy).rem_euclid(2) == 0,
+                2 => !hash(xx, yy, 71).is_multiple_of(4),
+                _ => true,
+            };
+            c.px(xx, yy, if on { p.rim } else { p.void });
+        }
+    }
+}
+
 /// The scene in the playlist's open panel, a `w`x`h` dark window at `x, y`.
 fn panel_scene(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
     let p = pal();
@@ -1444,7 +1671,10 @@ fn vnoise(x: i32, y: i32, cell: i32, seed: u32) -> f32 {
 
 /// Darken towards the edges, for depth.
 fn vignette(c: &mut Canvas, w: i32, h: i32) {
-    if matches!(theme().style, Style::Wireframe | Style::Temple) {
+    if matches!(
+        theme().style,
+        Style::Wireframe | Style::Temple | Style::Chroma
+    ) {
         return;
     }
     for y in 0..h {
@@ -1468,7 +1698,7 @@ fn titlebar_bmp() -> Canvas {
             SpriteKey::EasterEggTitleBar { active },
         ] {
             c.put(key, |c, x, y, w, _| {
-                title_strip(c, x, y, w, "LANTERN", active, 12)
+                title_strip(c, (x, y, w), "LANTERN", active, 12, 0)
             });
         }
         // Windowshade: the strip carries the mini display and transport.
@@ -1846,6 +2076,7 @@ fn eqmain_bmp() -> Canvas {
     c.backdrop(0, 0, 275, 315, 31);
     c.put(SpriteKey::EqBackground, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 32);
+        c.burst(x, y, w, h, 116);
         c.frame(x, y, w, h, pal().s3, pal().s0);
         style_decor(&mut *c, w, h, false);
         c.recess(86, 17, 113, 19, pal().void);
@@ -1881,7 +2112,7 @@ fn eqmain_bmp() -> Canvas {
     });
     for active in [true, false] {
         c.put(SpriteKey::EqTitleBar { active }, |c, x, y, w, _| {
-            title_strip(c, x, y, w, "EQUALIZER", active, 34);
+            title_strip(c, (x, y, w), "EQUALIZER", active, 34, 116);
             // Shade and close, painted in; close also has its own sprite.
             small_button(c, x + 254, y + 3, &ICON_SHADE, false);
             small_button(c, x + 264, y + 3, &ICON_CLOSE, false);
@@ -2149,7 +2380,9 @@ fn pledit_bmp() -> Canvas {
         c.fill(x, y + h - 1, w, 1, pal().s0);
         c.recess(x + 3, y + 8, w - 6, 21, pal().void);
         // Something in the dark: a ghost koi, or the theme's own scene.
-        if theme().creatures || theme().style == Style::Night {
+        if theme().style == Style::Chroma {
+            chroma_panel(&mut *c, x + 3, y + 8, w - 6, 21);
+        } else if theme().creatures || theme().style == Style::Night {
             panel_scene(&mut *c, x + 3, y + 8, w - 6, 21);
         }
         c.moss(x, y + h - 2, w, true, 65);
@@ -2766,6 +2999,18 @@ mod classic {
 
 /// Background, grid dots, 16 bar rows top to bottom, oscilloscope, peaks.
 fn viscolor() -> String {
+    let p = pal();
+    if theme().style == Style::Chroma {
+        // Loud is red and stands forward; quiet is blue and sinks.
+        let mut lines = vec![p.void, p.cyan3];
+        lines.extend((0..16).map(|k| if k < 9 { p.cyan } else { p.s2 }));
+        lines.extend([p.cyan; 5]);
+        lines.push(p.cyan);
+        return lines
+            .iter()
+            .map(|[r, g, b]| format!("{r},{g},{b}\n"))
+            .collect();
+    }
     let mut lines = vec![pal().void, [24, 22, 44]];
     for k in 0..16 {
         let t = k as f32 / 15.0;

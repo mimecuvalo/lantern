@@ -1007,11 +1007,7 @@ fn open_track(
         path: path.to_path_buf(),
         start_secs: 0.0,
         end_secs: None,
-        title: tags.title.unwrap_or_else(|| {
-            path.file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        }),
+        title: tags.title.unwrap_or_else(|| crate::tags::stem_title(path)),
         sample_rate: src_rate,
         channels: src_channels as u16,
         kbps: tags.kbps,

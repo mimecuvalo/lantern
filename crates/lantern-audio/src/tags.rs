@@ -2,7 +2,8 @@
 //!
 //! Symphonia decodes; lofty is better at tags and knows each format's
 //! bitrate. Reading tags never fails outright — a file without them just
-//! shows fewer facts.
+//! shows fewer facts — and is lenient, so one malformed frame does not
+//! cost a file its other tags.
 
 use std::path::Path;
 
@@ -14,10 +15,23 @@ pub struct Tags {
     pub duration_secs: Option<f64>,
 }
 
+/// A file's name without its extension, composed to NFC so a decomposed
+/// "š" (as macOS file names often have it) draws as one letter.
+pub fn stem_title(path: &Path) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    path.file_stem()
+        .map(|s| s.to_string_lossy().nfc().collect())
+        .unwrap_or_default()
+}
+
 pub fn read(path: &Path) -> Tags {
+    use lofty::config::{ParseOptions, ParsingMode};
     use lofty::prelude::*;
 
-    let Ok(file) = lofty::read_from_path(path) else {
+    let Ok(file) = lofty::probe::Probe::open(path).and_then(|p| {
+        p.options(ParseOptions::new().parsing_mode(ParsingMode::Relaxed))
+            .read()
+    }) else {
         return Tags::default();
     };
     let props = file.properties();

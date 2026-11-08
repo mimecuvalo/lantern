@@ -9,8 +9,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-lofty = "0.25.4"
+lofty = "0.25.5"
 notify = "8.2.1"
 plist = { version = "1.10.1", default-features = false }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 thiserror = "2"
+unicode-normalization = "0.1"

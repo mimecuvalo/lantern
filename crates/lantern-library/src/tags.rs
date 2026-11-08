@@ -2,7 +2,9 @@
 //! the views and columns use, where the playlist needs only a title.
 //!
 //! Reading never fails outright. A file lofty cannot read, or one without
-//! tags, still joins the library under its file name. [`write`] puts edited
+//! tags, still joins the library under its file name. Reading is lenient:
+//! one malformed tag frame (a garbled date, say) is dropped rather than
+//! costing the file all its other tags. [`write`] puts edited
 //! tags back, for File Info; [`details`] is what File Info shows of the
 //! file itself.
 
@@ -23,6 +25,27 @@ pub fn fingerprint(meta: &std::fs::Metadata) -> (u64, i64) {
     (meta.len(), modified)
 }
 
+/// Open `path` with lofty, leniently. The default mode gives up on a whole
+/// file over one bad ID3 frame.
+fn open(path: &Path) -> Result<lofty::file::TaggedFile, String> {
+    use lofty::config::{ParseOptions, ParsingMode};
+    lofty::probe::Probe::open(path)
+        .map_err(|e| e.to_string())?
+        .options(ParseOptions::new().parsing_mode(ParsingMode::Relaxed))
+        .read()
+        .map_err(|e| e.to_string())
+}
+
+/// A file's name without its extension, for a track with no title tag.
+/// Composed to NFC: macOS file names often spell "š" as "s" plus a
+/// combining caron, which the skin fonts cannot draw.
+pub fn stem_title(path: &Path) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    path.file_stem()
+        .map(|s| s.to_string_lossy().nfc().collect())
+        .unwrap_or_default()
+}
+
 fn clean(s: Option<impl AsRef<str>>) -> String {
     s.map(|s| s.as_ref().trim().to_string()).unwrap_or_default()
 }
@@ -31,18 +54,14 @@ pub fn read(path: &Path) -> TrackInfo {
     let (size, modified) = std::fs::metadata(path)
         .map(|m| fingerprint(&m))
         .unwrap_or_default();
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let mut info = TrackInfo {
         path: path.to_path_buf(),
-        title: stem.clone(),
+        title: stem_title(path),
         size,
         modified,
         ..TrackInfo::default()
     };
-    let Ok(file) = lofty::read_from_path(path) else {
+    let Ok(file) = open(path) else {
         return info;
     };
     let props = file.properties();
@@ -78,7 +97,7 @@ pub struct Details {
 
 pub fn details(path: &Path) -> Details {
     let size = std::fs::metadata(path).map_or(0, |m| m.len());
-    let Ok(file) = lofty::read_from_path(path) else {
+    let Ok(file) = open(path) else {
         return Details {
             size,
             ..Details::default()
@@ -117,7 +136,7 @@ pub fn details(path: &Path) -> Details {
 pub fn write(path: &Path, info: &TrackInfo) -> Result<(), String> {
     use lofty::config::WriteOptions;
     use lofty::tag::{Accessor, Tag};
-    let mut file = lofty::read_from_path(path).map_err(|e| e.to_string())?;
+    let mut file = open(path)?;
     if file.primary_tag().is_none() {
         file.insert_tag(Tag::new(file.primary_tag_type()));
     }
@@ -171,6 +190,33 @@ mod tests {
         assert!(info.modified > 0);
         assert_eq!(info.artist, "");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_decomposed_file_name_titles_composed() {
+        let title = stem_title(Path::new("/m/s\u{30C}imun singing.m4a"));
+        assert_eq!(title, "\u{161}imun singing");
+    }
+
+    /// Files lofty 0.25.4 could not read: an Apple-written .m4a whose
+    /// `mdat` has a 64-bit size, and an MP3 with a garbled TDRC frame.
+    /// Skipped unless the music folder is present.
+    #[test]
+    fn awkward_files_read_their_tags() {
+        let music = Path::new(env!("HOME")).join("Library/CloudStorage/Dropbox/Music");
+        for (file, artist) in [
+            ("indie rock/Alt-J Tiny Desk Concert.m4a", "Alt-J"),
+            ("legacy rock/Games/ff8/Final Fantasy VIII Ending Theme.mp3", "Final Fantasy VIII"),
+        ] {
+            let path = music.join(file);
+            if !path.exists() {
+                eprintln!("SKIPPED: {} not present", path.display());
+                continue;
+            }
+            let info = read(&path);
+            assert_eq!(info.artist, artist, "{file}");
+            assert!(info.duration_secs.is_some(), "{file}");
+        }
     }
 
     #[test]

@@ -124,10 +124,7 @@ impl App {
     pub(crate) fn open_info(&mut self, path: PathBuf) {
         let t = tags::read(&path);
         // A file without a title tag reads as its file name; show it empty.
-        let stem = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let stem = tags::stem_title(&path);
         let title = if t.title == stem { "" } else { &t.title };
         let values = [
             title.to_string(),

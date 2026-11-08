@@ -147,6 +147,15 @@ the project, kept here because the git history itself was then cleared.
 
 ### Fixed
 
+- Tracks that showed only their file name, with no artist or length, now
+  read their tags. These were .m4a files written by Apple's tools (lofty
+  0.25.4 lost its place in them; 0.25.5 fixes it) and MP3s with one
+  malformed tag frame, which are now read leniently. Tracks already in the
+  library without a length are read again on the next scan, keeping their
+  plays and ratings.
+- File names with accented letters spelled the macOS way ("s" plus a
+  combining caron) show as one letter, "š", instead of an "s" and a box.
+
 - **No more crash in a file panel.** Choosing files or folders (adding to the
   library, the playlist, opening skins or EQ presets) could abort the app:
   the panel ran modally inside winit's event handler, and an event winit

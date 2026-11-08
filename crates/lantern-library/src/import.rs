@@ -113,7 +113,7 @@ fn xml_track(d: &Dictionary) -> Option<ImportedTrack> {
     let (size, modified) = tags::fingerprint(&meta);
     let mut title = string(d, "Name");
     if title.is_empty() {
-        title = path.file_stem()?.to_string_lossy().into_owned();
+        title = tags::stem_title(&path);
     }
     let rating = if flag(d, "Rating Computed") {
         0

@@ -44,10 +44,11 @@ impl Entry {
 
     /// What the playlist shows: the title, or failing that the file name.
     pub fn display_title(&self) -> String {
+        use unicode_normalization::UnicodeNormalization;
         self.title.clone().unwrap_or_else(|| {
             self.path
                 .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
+                .map(|s| s.to_string_lossy().nfc().collect())
                 .unwrap_or_default()
         })
     }

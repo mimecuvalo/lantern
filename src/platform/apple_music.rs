@@ -107,7 +107,7 @@ fn track(item: &AnyObject) -> Option<ImportedTrack> {
     });
     let mut title = string(item, "title");
     if title.is_empty() {
-        title = path.file_stem()?.to_string_lossy().into_owned();
+        title = lantern_library::tags::stem_title(&path);
     }
     Some(ImportedTrack {
         info: TrackInfo {

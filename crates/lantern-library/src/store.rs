@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{Result, Track, TrackInfo};
 
 /// Bumped with each change to the schema; see [`Library::migrate`].
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 pub struct Library {
     db: Connection,
@@ -125,6 +125,14 @@ impl Library {
                      PRIMARY KEY (playlist, position)
                  );",
             )?;
+        }
+        if version < 2 {
+            // Older builds could not read some files' tags (Apple-written
+            // .m4a, MP3s with one bad frame) and stored them under their
+            // file name with no duration. Forget those fingerprints so the
+            // next scan reads them again; plays and ratings stay.
+            self.db
+                .execute("UPDATE tracks SET size = -1 WHERE duration IS NULL", [])?;
         }
         self.db
             .pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -493,6 +501,22 @@ mod tests {
         assert_eq!(lib.fingerprints().unwrap()[Path::new("/m/a.mp3")], (100, 5));
         lib.remove(&[PathBuf::from("/m/a.mp3")]).unwrap();
         assert!(lib.fingerprints().unwrap().is_empty());
+    }
+
+    #[test]
+    fn upgrading_rereads_tracks_stored_without_a_duration() {
+        let mut lib = Library::open_in_memory().unwrap();
+        let read_ok = TrackInfo {
+            duration_secs: Some(60.0),
+            ..info("/m/ok.m4a", "Ok")
+        };
+        lib.upsert(&[read_ok, info("/m/unread.m4a", "unread")], 1)
+            .unwrap();
+        lib.db.pragma_update(None, "user_version", 1).unwrap();
+        lib.migrate().unwrap();
+        let prints = lib.fingerprints().unwrap();
+        assert_eq!(prints[Path::new("/m/ok.m4a")], (100, 5));
+        assert_ne!(prints[Path::new("/m/unread.m4a")], (100, 5));
     }
 
     #[test]

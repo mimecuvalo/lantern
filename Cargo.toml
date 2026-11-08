@@ -46,6 +46,8 @@ muda = "0.20.0"
 # cpal already pull in, so these add no new crates to the build.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
+# Runs file panels from the main queue, outside winit's event handler.
+dispatch2 = "0.3"
 objc2 = "0.6.4"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGPath", "CGImage", "CGColorSpace"] }

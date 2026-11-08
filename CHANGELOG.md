@@ -147,6 +147,12 @@ the project, kept here because the git history itself was then cleared.
 
 ### Fixed
 
+- **No more crash in a file panel.** Choosing files or folders (adding to the
+  library, the playlist, opening skins or EQ presets) could abort the app:
+  the panel ran modally inside winit's event handler, and an event winit
+  queued meanwhile re-entered it. Panels now open from the main dispatch
+  queue, after the handler returns, and their choice is applied on the next
+  turn of the loop.
 - **The menu bar says Lantern, not lantern**, when run straight from
   `cargo run`: the executable is now `Lantern`, since outside an app bundle
   macOS names the app after it (so `cargo test --bin Lantern`).

@@ -336,17 +336,14 @@ impl App {
         let shown = self.playlist_selected_in_tree();
         match id {
             "play_files" => self.eject(),
-            "play_folder" => {
-                if let Some(dir) = rfd::FileDialog::new()
-                    .set_title("Play folder")
-                    .pick_folder()
-                {
-                    self.playlist.clear();
-                    self.pl_scroll = 0;
-                    self.add_paths([dir]);
-                    self.play_entry(0);
-                }
-            }
+            "play_folder" => self.ask(
+                || {
+                    rfd::FileDialog::new()
+                        .set_title("Play folder")
+                        .pick_folder()
+                },
+                |app, dir| app.play_paths([dir]),
+            ),
             "load_skin" => self.load_skin_dialog(),
             "default_skin" => self.use_default_skin(),
             "get_skins" => open_url(SKIN_MUSEUM),
@@ -454,14 +451,19 @@ impl App {
     }
 
     fn load_eq_preset(&mut self) {
-        let Some(file) = rfd::FileDialog::new()
-            .set_title("Load EQ preset")
-            .add_filter("Winamp EQ presets", &["eqf", "q1"])
-            .pick_file()
-        else {
-            return;
-        };
-        let presets = match std::fs::read(&file)
+        self.ask(
+            || {
+                rfd::FileDialog::new()
+                    .set_title("Load EQ preset")
+                    .add_filter("Winamp EQ presets", &["eqf", "q1"])
+                    .pick_file()
+            },
+            |app, file| app.load_eq_file(&file),
+        );
+    }
+
+    fn load_eq_file(&mut self, file: &std::path::Path) {
+        let presets = match std::fs::read(file)
             .map_err(|e| e.to_string())
             .and_then(|b| eqf::parse(&b).map_err(|e| e.to_string()))
         {
@@ -480,14 +482,19 @@ impl App {
     }
 
     fn save_eq_preset(&mut self) {
-        let Some(mut file) = rfd::FileDialog::new()
-            .set_title("Save EQ preset")
-            .add_filter("Winamp EQ preset", &["eqf"])
-            .set_file_name("preset.eqf")
-            .save_file()
-        else {
-            return;
-        };
+        self.ask(
+            || {
+                rfd::FileDialog::new()
+                    .set_title("Save EQ preset")
+                    .add_filter("Winamp EQ preset", &["eqf"])
+                    .set_file_name("preset.eqf")
+                    .save_file()
+            },
+            |app, file| app.save_eq_file(file),
+        );
+    }
+
+    fn save_eq_file(&mut self, mut file: std::path::PathBuf) {
         if file.extension().is_none() {
             file.set_extension("eqf");
         }

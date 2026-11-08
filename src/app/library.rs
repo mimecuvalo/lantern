@@ -524,14 +524,19 @@ impl App {
     }
 
     pub(crate) fn library_add_folder(&mut self) {
-        let Some(dir) = rfd::FileDialog::new()
-            .set_title("Add a folder to the library")
-            .pick_folder()
-        else {
-            return;
-        };
+        self.ask(
+            || {
+                rfd::FileDialog::new()
+                    .set_title("Add a folder to the library")
+                    .pick_folder()
+            },
+            |app, dir| app.library_watch_folder(&dir),
+        );
+    }
+
+    fn library_watch_folder(&mut self, dir: &std::path::Path) {
         if let Some(db) = &self.library.db
-            && let Err(e) = db.add_folder(&dir)
+            && let Err(e) = db.add_folder(dir)
         {
             eprintln!("could not watch {}: {e}", dir.display());
             return;
@@ -565,17 +570,20 @@ impl App {
     }
 
     pub(crate) fn library_import_xml(&mut self) {
-        let Some(file) = rfd::FileDialog::new()
-            .set_title("Import an Apple Music or iTunes library file")
-            .add_filter("Library XML", &["xml"])
-            .pick_file()
-        else {
-            return;
-        };
-        if self.library.send(Job::Xml(file)) {
-            self.library.busy = Some(Busy::Importing);
-        }
-        self.show_library();
+        self.ask(
+            || {
+                rfd::FileDialog::new()
+                    .set_title("Import an Apple Music or iTunes library file")
+                    .add_filter("Library XML", &["xml"])
+                    .pick_file()
+            },
+            |app, file| {
+                if app.library.send(Job::Xml(file)) {
+                    app.library.busy = Some(Busy::Importing);
+                }
+                app.show_library();
+            },
+        );
     }
 
     pub(super) fn show_library(&mut self) {

@@ -186,6 +186,8 @@ pub struct App {
     /// Quit at the next turn of the loop — for actions that run where the
     /// event loop is not to hand, such as menu choices.
     quit_requested: bool,
+    /// File panels waiting to show, and what they chose.
+    dialogs: dialogs::Dialogs,
     /// What was last written to disk, so autosave only writes on change.
     last_saved: Option<(settings::Settings, String)>,
     last_save_check: Instant,
@@ -277,6 +279,7 @@ impl App {
             drag: None,
             restoring: false,
             quit_requested: false,
+            dialogs: dialogs::Dialogs::default(),
             last_saved: None,
             last_save_check: Instant::now(),
         };
@@ -1130,6 +1133,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.drain_menu_events();
+        self.drain_dialogs();
         if self.quit_requested {
             event_loop.exit();
             return;

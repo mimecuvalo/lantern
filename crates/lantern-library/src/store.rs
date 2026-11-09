@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::{Result, Track, TrackInfo};
 
 /// Bumped with each change to the schema; see [`Library::migrate`].
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 pub struct Library {
     db: Connection,
@@ -134,8 +134,45 @@ impl Library {
             self.db
                 .execute("UPDATE tracks SET size = -1 WHERE duration IS NULL", [])?;
         }
+        if version < 3 {
+            self.reread_from_v2()?;
+        }
         self.db
             .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        Ok(())
+    }
+
+    /// Forget the fingerprints of tracks read before two fixes, so the next
+    /// scan reads them again (plays and ratings stay): MP4 files, whose
+    /// tag after the cover art was lost (a genre, often), and tracks whose
+    /// text was stored with decomposed accents ("s" plus a combining
+    /// caron), which the skin fonts draw as a box.
+    fn reread_from_v2(&self) -> Result<()> {
+        use unicode_normalization::is_nfc;
+        let mut q = self.db.prepare(
+            "SELECT id, path, title, artist, album, album_artist, genre FROM tracks",
+        )?;
+        let stale: Vec<i64> = q
+            .query_map([], |r| {
+                let mp4 = Path::new(&r.get::<_, String>(1)?)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| {
+                        ["m4a", "m4b", "mp4"].iter().any(|x| x.eq_ignore_ascii_case(e))
+                    });
+                let mut decomposed = false;
+                for i in 2..=6 {
+                    decomposed |= !is_nfc(&r.get::<_, String>(i)?);
+                }
+                Ok((r.get::<_, i64>(0)?, mp4 || decomposed))
+            })?
+            .filter_map(|row| row.ok().filter(|&(_, stale)| stale).map(|(id, _)| id))
+            .collect();
+        drop(q);
+        let mut mark = self.db.prepare("UPDATE tracks SET size = -1 WHERE id = ?1")?;
+        for id in stale {
+            mark.execute([id])?;
+        }
         Ok(())
     }
 
@@ -508,15 +545,39 @@ mod tests {
         let mut lib = Library::open_in_memory().unwrap();
         let read_ok = TrackInfo {
             duration_secs: Some(60.0),
-            ..info("/m/ok.m4a", "Ok")
+            ..info("/m/ok.mp3", "Ok")
         };
-        lib.upsert(&[read_ok, info("/m/unread.m4a", "unread")], 1)
+        lib.upsert(&[read_ok, info("/m/unread.mp3", "unread")], 1)
             .unwrap();
         lib.db.pragma_update(None, "user_version", 1).unwrap();
         lib.migrate().unwrap();
         let prints = lib.fingerprints().unwrap();
-        assert_eq!(prints[Path::new("/m/ok.m4a")], (100, 5));
-        assert_ne!(prints[Path::new("/m/unread.m4a")], (100, 5));
+        assert_eq!(prints[Path::new("/m/ok.mp3")], (100, 5));
+        assert_ne!(prints[Path::new("/m/unread.mp3")], (100, 5));
+    }
+
+    #[test]
+    fn upgrading_from_v2_rereads_mp4s_and_decomposed_text() {
+        let mut lib = Library::open_in_memory().unwrap();
+        let read = |path: &str, title: &str| TrackInfo {
+            duration_secs: Some(60.0),
+            ..info(path, title)
+        };
+        lib.upsert(
+            &[
+                read("/m/fine.mp3", "Fine"),
+                read("/m/art.m4a", "Art"),
+                read("/m/talk.wav", "s\u{30C}imun talking"),
+            ],
+            1,
+        )
+        .unwrap();
+        lib.db.pragma_update(None, "user_version", 2).unwrap();
+        lib.migrate().unwrap();
+        let prints = lib.fingerprints().unwrap();
+        assert_eq!(prints[Path::new("/m/fine.mp3")], (100, 5));
+        assert_ne!(prints[Path::new("/m/art.m4a")], (100, 5));
+        assert_ne!(prints[Path::new("/m/talk.wav")], (100, 5));
     }
 
     #[test]

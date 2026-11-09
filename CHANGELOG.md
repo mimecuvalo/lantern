@@ -153,8 +153,13 @@ the project, kept here because the git history itself was then cleared.
   malformed tag frame, which are now read leniently. Tracks already in the
   library without a length are read again on the next scan, keeping their
   plays and ratings.
-- File names with accented letters spelled the macOS way ("s" plus a
-  combining caron) show as one letter, "š", instead of an "s" and a box.
+- File names and tags with accented letters spelled the macOS way ("s" plus
+  a combining caron) show as one letter, "š", instead of an "s" and a box.
+  Tracks already stored that way are read again on the next scan.
+- MP4 files with cover art keep the tag that follows it, often the genre:
+  lofty lost it, so the library now reads tags without the (unused) cover
+  art. Saving from File Info still reads the art, so it is kept. MP4 tracks
+  already in the library are read again on the next scan.
 
 - **No more crash in a file panel.** Choosing files or folders (adding to the
   library, the playlist, opening skins or EQ presets) could abort the app:

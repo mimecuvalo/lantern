@@ -27,11 +27,18 @@ pub fn fingerprint(meta: &std::fs::Metadata) -> (u64, i64) {
 
 /// Open `path` with lofty, leniently. The default mode gives up on a whole
 /// file over one bad ID3 frame.
-fn open(path: &Path) -> Result<lofty::file::TaggedFile, String> {
+///
+/// Reading for the library skips cover art: nothing shows it, and lofty
+/// 0.25.5 loses the MP4 tag that follows a `covr` atom (a genre, often).
+/// Writing must read it, since a save puts back only what was read.
+fn open(path: &Path, cover_art: bool) -> Result<lofty::file::TaggedFile, String> {
     use lofty::config::{ParseOptions, ParsingMode};
+    let options = ParseOptions::new()
+        .parsing_mode(ParsingMode::Relaxed)
+        .read_cover_art(cover_art);
     lofty::probe::Probe::open(path)
         .map_err(|e| e.to_string())?
-        .options(ParseOptions::new().parsing_mode(ParsingMode::Relaxed))
+        .options(options)
         .read()
         .map_err(|e| e.to_string())
 }
@@ -46,8 +53,11 @@ pub fn stem_title(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// A tag's text, trimmed and composed to NFC (see [`stem_title`]).
 fn clean(s: Option<impl AsRef<str>>) -> String {
-    s.map(|s| s.as_ref().trim().to_string()).unwrap_or_default()
+    use unicode_normalization::UnicodeNormalization;
+    s.map(|s| s.as_ref().trim().nfc().collect())
+        .unwrap_or_default()
 }
 
 pub fn read(path: &Path) -> TrackInfo {
@@ -61,7 +71,7 @@ pub fn read(path: &Path) -> TrackInfo {
         modified,
         ..TrackInfo::default()
     };
-    let Ok(file) = open(path) else {
+    let Ok(file) = open(path, false) else {
         return info;
     };
     let props = file.properties();
@@ -97,7 +107,7 @@ pub struct Details {
 
 pub fn details(path: &Path) -> Details {
     let size = std::fs::metadata(path).map_or(0, |m| m.len());
-    let Ok(file) = open(path) else {
+    let Ok(file) = open(path, false) else {
         return Details {
             size,
             ..Details::default()
@@ -136,7 +146,7 @@ pub fn details(path: &Path) -> Details {
 pub fn write(path: &Path, info: &TrackInfo) -> Result<(), String> {
     use lofty::config::WriteOptions;
     use lofty::tag::{Accessor, Tag};
-    let mut file = open(path)?;
+    let mut file = open(path, true)?;
     if file.primary_tag().is_none() {
         file.insert_tag(Tag::new(file.primary_tag_type()));
     }
@@ -199,14 +209,17 @@ mod tests {
     }
 
     /// Files lofty 0.25.4 could not read: an Apple-written .m4a whose
-    /// `mdat` has a 64-bit size, and an MP3 with a garbled TDRC frame.
+    /// `mdat` has a 64-bit size, and an MP3 with a garbled TDRC frame; and
+    /// one whose genre follows its cover art.
     /// Skipped unless the music folder is present.
     #[test]
     fn awkward_files_read_their_tags() {
         let music = Path::new(env!("HOME")).join("Library/CloudStorage/Dropbox/Music");
-        for (file, artist) in [
-            ("indie rock/Alt-J Tiny Desk Concert.m4a", "Alt-J"),
-            ("legacy rock/Games/ff8/Final Fantasy VIII Ending Theme.mp3", "Final Fantasy VIII"),
+        for (file, artist, genre) in [
+            ("indie rock/Alt-J Tiny Desk Concert.m4a", "Alt-J", "indie misc"),
+            ("legacy rock/Games/ff8/Final Fantasy VIII Ending Theme.mp3", "Final Fantasy VIII", "legacy"),
+            // Its genre comes after the cover art.
+            ("legacy rock/Jookabox/03 You Cried Me.m4a", "Jookabox", "legacy"),
         ] {
             let path = music.join(file);
             if !path.exists() {
@@ -215,6 +228,7 @@ mod tests {
             }
             let info = read(&path);
             assert_eq!(info.artist, artist, "{file}");
+            assert_eq!(info.genre, genre, "{file}");
             assert!(info.duration_secs.is_some(), "{file}");
         }
     }

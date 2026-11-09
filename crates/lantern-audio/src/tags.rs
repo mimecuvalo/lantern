@@ -29,7 +29,11 @@ pub fn read(path: &Path) -> Tags {
     use lofty::prelude::*;
 
     let Ok(file) = lofty::probe::Probe::open(path).and_then(|p| {
-        p.options(ParseOptions::new().parsing_mode(ParsingMode::Relaxed))
+        p.options(
+            ParseOptions::new()
+                .parsing_mode(ParsingMode::Relaxed)
+                .read_cover_art(false),
+        )
             .read()
     }) else {
         return Tags::default();

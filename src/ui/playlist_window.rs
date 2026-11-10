@@ -170,9 +170,13 @@ pub fn draw_shade(
     } else {
         title.to_string()
     };
-    draw_text(dst, skin, &title, 5, 4, scale);
+    // Webamp's y=4 suits a font inked from its cells' top row. A font set
+    // a row lower (Lantern's own) is drawn a row higher, so its ink lands
+    // where a classic skin's does, centred in the strip.
+    let text_y = if skin.text_starts_low() { 3 } else { 4 };
+    draw_text(dst, skin, &title, 5, text_y, scale);
     let time_x = w - 30 - (time.chars().count() as i32 * 5);
-    draw_text(dst, skin, time, time_x, 4, scale);
+    draw_text(dst, skin, time, time_x, text_y, scale);
 
     for x in widgets {
         let key = match x.id {

@@ -34,7 +34,7 @@ pub fn read(path: &Path) -> Tags {
                 .parsing_mode(ParsingMode::Relaxed)
                 .read_cover_art(false),
         )
-            .read()
+        .read()
     }) else {
         return Tags::default();
     };

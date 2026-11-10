@@ -97,10 +97,18 @@ pub fn main_window() -> Vec<Widget> {
 /// buttons are painted into the shade background, so they are invisible
 /// hit zones; the widget ids are the full window's, so clicks act the same.
 /// Positions from Webamp's `main-window.css` `.shade` rules.
+///
+/// The toggles whose state lives on widgets come along too, at zero size:
+/// unseen and unclickable, but still there to hold shuffle, repeat, always
+/// on top and double size while shaded, and to be saved from.
 pub fn main_shade() -> Vec<Widget> {
     let w = |id, x, y, width, height, kind| Widget::new(id, Rect::new(x, y, width, height), kind);
-    use WidgetKind::{Button, HitZone, Slider};
+    use WidgetKind::{Button, HitZone, Slider, Toggle};
     vec![
+        w(SHUFFLE, 0, 0, 0, 0, Toggle),
+        w(REPEAT, 0, 0, 0, 0, Toggle),
+        w(CLUTTER_A, 0, 0, 0, 0, Toggle),
+        w(CLUTTER_D, 0, 0, 0, 0, Toggle),
         w(TITLE_DRAG, 0, 0, WINDOW_WIDTH, 14, HitZone),
         w(OPTIONS, 6, 3, 9, 9, Button),
         w(VISUALIZER, 79, 5, 38, 5, HitZone),
@@ -204,6 +212,19 @@ mod tests {
                 "{:?} overflows the window height",
                 w.id
             );
+        }
+    }
+
+    #[test]
+    fn shade_keeps_the_toggles_that_live_on_widgets() {
+        let shade = main_shade();
+        for id in [SHUFFLE, REPEAT, CLUTTER_A, CLUTTER_D] {
+            let w = shade.iter().find(|w| w.id == id);
+            assert!(
+                w.is_some_and(|w| w.rect.w == 0),
+                "{id:?} missing or visible"
+            );
+            assert_ne!(crate::ui::hit_test(&shade, 0, 0), Some(id));
         }
     }
 

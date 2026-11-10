@@ -149,16 +149,18 @@ impl Library {
     /// caron), which the skin fonts draw as a box.
     fn reread_from_v2(&self) -> Result<()> {
         use unicode_normalization::is_nfc;
-        let mut q = self.db.prepare(
-            "SELECT id, path, title, artist, album, album_artist, genre FROM tracks",
-        )?;
+        let mut q = self
+            .db
+            .prepare("SELECT id, path, title, artist, album, album_artist, genre FROM tracks")?;
         let stale: Vec<i64> = q
             .query_map([], |r| {
                 let mp4 = Path::new(&r.get::<_, String>(1)?)
                     .extension()
                     .and_then(|e| e.to_str())
                     .is_some_and(|e| {
-                        ["m4a", "m4b", "mp4"].iter().any(|x| x.eq_ignore_ascii_case(e))
+                        ["m4a", "m4b", "mp4"]
+                            .iter()
+                            .any(|x| x.eq_ignore_ascii_case(e))
                     });
                 let mut decomposed = false;
                 for i in 2..=6 {
@@ -169,7 +171,9 @@ impl Library {
             .filter_map(|row| row.ok().filter(|&(_, stale)| stale).map(|(id, _)| id))
             .collect();
         drop(q);
-        let mut mark = self.db.prepare("UPDATE tracks SET size = -1 WHERE id = ?1")?;
+        let mut mark = self
+            .db
+            .prepare("UPDATE tracks SET size = -1 WHERE id = ?1")?;
         for id in stale {
             mark.execute([id])?;
         }

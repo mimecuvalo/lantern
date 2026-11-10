@@ -365,9 +365,12 @@ pub fn set_window_region(window: &Window, polygons: &[Polygon], scale: f64) -> b
     } else {
         let mask = CALayer::new();
         mask.setFrame(root.bounds());
-        // winit's view is flipped (top-left origin), and so is `region.txt`;
-        // make the mask agree so the polygons land where they are drawn.
-        mask.setGeometryFlipped(root.isGeometryFlipped());
+        // The root layer is geometry-flipped (top-left origin), as
+        // `region.txt` is, and the mask takes its coordinates from it. Left
+        // unflipped, the mask agrees; flipping it as well (matching the
+        // root's flag) turned it back over and cut the mini player's bottom
+        // row in place of its top one.
+        mask.setGeometryFlipped(false);
         for polygon in polygons {
             let shape = CAShapeLayer::new();
             shape.setFrame(root.bounds());

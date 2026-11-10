@@ -739,6 +739,14 @@ impl App {
         if let Some(p) = position {
             attrs = attrs.with_position(p);
         }
+        // No drop shadow: docked windows sit flush, and the focused one's
+        // larger shadow fell across its neighbour's edge, dimming that
+        // window's top line as focus moved.
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attrs = attrs.with_has_shadow(false);
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -1080,11 +1088,19 @@ impl ApplicationHandler for App {
             self.create_pane(event_loop, kind, at);
             if place.shaded {
                 self.toggle_shade(kind);
+                // Shrunk while hidden, a macOS window keeps its bottom edge
+                // and lets its top drop: put it back where it was saved.
+                if let Some((x, y)) = place.position {
+                    self.place(kind, x, y);
+                }
             }
             self.set_visible(kind, place.visible);
         }
         if restored.main.shaded {
             self.toggle_shade(PaneKind::Main);
+            if let Some((x, y)) = restored.main.position {
+                self.place(PaneKind::Main, x, y);
+            }
         }
         // Jump to File and File Info wait, hidden, near the main window.
         for kind in [PaneKind::Jump, PaneKind::Info] {

@@ -148,6 +148,14 @@ pub fn db_from_level(level: f32) -> f32 {
     (level.clamp(0.0, 1.0) - 0.5) * 24.0
 }
 
+/// Within this of 0 dB the preamp settles on 0: about two pixels of thumb
+/// travel either side, as the balance slider snaps to centre.
+const PREAMP_SNAP_DB: f32 = 1.0;
+
+pub fn snap_preamp(db: f32) -> f32 {
+    if db.abs() < PREAMP_SNAP_DB { 0.0 } else { db }
+}
+
 /// Level for a pointer `local_y` pixels below the slider's top, keeping the
 /// pointer on the thumb's centre.
 pub fn level_from_y(local_y: i32) -> f32 {
@@ -339,6 +347,16 @@ mod tests {
         }
         assert_eq!(level_from_y(-40), 1.0);
         assert_eq!(level_from_y(400), 0.0);
+    }
+
+    #[test]
+    fn preamp_snaps_to_zero_near_the_middle() {
+        assert_eq!(snap_preamp(0.6), 0.0);
+        assert_eq!(snap_preamp(-0.9), 0.0);
+        assert_eq!(snap_preamp(1.5), 1.5);
+        // The thumb's middle pixel lands inside the snap.
+        let middle = db_from_level(level_from_y(thumb_y(0.5) + THUMB_HALF as i32));
+        assert_eq!(snap_preamp(middle), 0.0);
     }
 
     #[test]

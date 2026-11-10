@@ -292,9 +292,16 @@ pub struct Skin {
     supplied: Vec<SheetId>,
     gen_font: GenFont,
     genex_colors: GenExColors,
+    text_starts_low: bool,
 }
 
 impl Skin {
+    /// Whether `text.bmp`'s glyphs sit a row down in their cells; see
+    /// [`font::ink_starts_low`].
+    pub fn text_starts_low(&self) -> bool {
+        self.text_starts_low
+    }
+
     /// Whether the Numbers slot holds `nums_ex.bmp`, whose minus sign is a
     /// full digit cell rather than a dash and so sits elsewhere.
     pub fn has_nums_ex(&self) -> bool {
@@ -406,6 +413,9 @@ pub fn parse(wsz: &[u8]) -> Result<Skin, SkinError> {
     };
 
     let text_file = |name: &str| entries.get(name).map(|bytes| text::decode(bytes));
+    let text_starts_low = sheets[SheetId::Text as usize]
+        .as_ref()
+        .is_some_and(font::ink_starts_low);
 
     Ok(Skin {
         sheets,
@@ -422,6 +432,7 @@ pub fn parse(wsz: &[u8]) -> Result<Skin, SkinError> {
         supplied,
         gen_font,
         genex_colors,
+        text_starts_low,
     })
 }
 

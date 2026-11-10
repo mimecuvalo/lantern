@@ -195,6 +195,39 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn lantern_skins_mask_the_main_windows_top_row() {
+        for (name, skin) in skins() {
+            if !(name == "default" || name.starts_with("lantern-")) {
+                continue;
+            }
+            for (region, h) in [(&skin.region.normal, 116), (&skin.region.windowshade, 14)] {
+                assert_eq!(region.len(), 1, "{name}");
+                assert_eq!(
+                    region[0].points,
+                    vec![(0, 1), (275, 1), (275, h), (0, h)],
+                    "{name}"
+                );
+            }
+            assert!(skin.region.equalizer.is_empty(), "{name}: EQ stays square");
+            assert!(skin.text_starts_low(), "{name}: font set a row down");
+        }
+    }
+
+    #[test]
+    fn classic_fonts_start_at_the_top_of_their_cells() {
+        let fixture = load_skin(std::path::Path::new(
+            "tests/fixtures/skins/lantern-fixture.wsz",
+        ))
+        .expect("fixture loads");
+        assert!(!fixture.text_starts_low());
+        if let Ok(base) = load_skin(std::path::Path::new("skins/base-2.91.wsz")) {
+            assert!(!base.text_starts_low());
+        } else {
+            eprintln!("SKIPPED: skins/base-2.91.wsz not present");
+        }
+    }
+
     fn render_check(path: &str, name: &str) {
         let skin = load_skin(std::path::Path::new(path)).expect("skin must load");
         let widgets = layout::main_window();

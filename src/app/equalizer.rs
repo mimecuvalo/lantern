@@ -50,7 +50,7 @@ impl App {
         }
         let db = eq_window::db_from_level(eq_window::level_from_y(y - rect.y));
         if id == eq_window::PREAMP {
-            self.eq.preamp_db = db;
+            self.eq.preamp_db = eq_window::snap_preamp(db);
         } else if let Some(i) = eq_window::band_index(id) {
             self.eq.band_gains_db[i] = db;
         } else {

@@ -16,6 +16,33 @@ pub const CHARSET: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\
                            \"@ 0123456789\u{2026}.:()-'!_+\\/[]^&%,=$#\
                            ÅÖÄåöä?*<>{}";
 
+/// Whether the font's letters and digits leave the top row of their cells
+/// blank — the space glyph's colour — and so start a row lower than the
+/// usual top-aligned font. Lantern's own skins do, to centre the main mini
+/// player's time; a strip that should centre its text on the ink, as the
+/// shaded playlist's title, draws such a font a row higher.
+///
+/// A fully blank font (or a missing sheet) answers `false`.
+pub fn ink_starts_low(sheet: &crate::Sheet) -> bool {
+    let at = |c: char| {
+        let (row, col) = cell(c);
+        (u32::from(col) * GLYPH_WIDTH, u32::from(row) * GLYPH_HEIGHT)
+    };
+    let (sx, sy) = at(' ');
+    let blank = sheet.pixel(sx, sy);
+    let mut inked = false;
+    for c in ('A'..='Z').chain('0'..='9') {
+        let (x, y) = at(c);
+        for dx in 0..GLYPH_WIDTH {
+            if sheet.pixel(x + dx, y) != blank {
+                return false;
+            }
+            inked |= (1..GLYPH_HEIGHT).any(|dy| sheet.pixel(x + dx, y + dy) != blank);
+        }
+    }
+    inked
+}
+
 /// `(row, column)` of `c`'s glyph. Characters the font lacks render as a
 /// space rather than failing — track titles contain everything.
 pub fn cell(c: char) -> (u8, u8) {

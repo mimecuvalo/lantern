@@ -157,8 +157,10 @@ guards CI.
 Carried forward deliberately, not oversights:
 
 1. **Shaped windows.** Investigated at M2: a platform-shell feature. The macOS
-   path (a root-layer mask in `platform/macos.rs`) is implemented but has not
-   been seen on screen yet. See the architecture doc §6.
+   path (a root-layer mask in `platform/macos.rs`) is implemented and first
+   seen working on 2026-11-09, masking off the top row of Lantern's own mini
+   player; a full irregular main-window region is still unseen. See the
+   architecture doc §6.
 2. **App bundle.** `scripts/bundle-app.sh` makes a dev `Lantern.app` (needed for
    Apple Music import); the rest of M7's packaging — notarisation, release
    CI — is still to come.

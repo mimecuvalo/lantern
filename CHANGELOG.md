@@ -144,9 +144,56 @@ the project, kept here because the git history itself was then cleared.
 - **Renamed to Lantern** (formerly Wamp). Settings move to
   `~/Library/Application Support/Lantern`; the old folder is read until
   Lantern first saves, so nothing is lost.
+- **Night's controls float.** The thin boxes around the transport row, the
+  sliders, the position bar and the EQ's sliders and labels are gone (and from Chroma's; the stone and schematic themes keep their beds). Every transport button, eject,
+  shuffle and repeat is now the same 15 rows tall, each 22px button has a
+  pixel of sky to its neighbour, and their icons sit dead centre. Mono and
+  stereo are centred in a box cut to fit them; the clutter bar's letters
+  are evenly spaced, V as wide as its neighbours, with the display's edge
+  running on beneath V. The
+  position thumb's bright middle is centred, and each EQ slider's track is
+  centred under its thumb, its label under its track, its shadow
+  starting level with its light. On and Auto have a
+  pixel between them.
+- **The mini player lines up**: Lantern's skins now ship a `region.txt`
+  that masks off the strip's top row, so it shows 13 rows with a framed
+  row above and below the buttons, framed in one colour all round. The
+  main window's top row is masked too, so its top edge stays put as it
+  rolls up and down; everything centres on the buttons' row,
+  the time and analyser boxes are one height, the transport icons are
+  5x5 (pause's bars equal, stop square) and evenly spaced, and the
+  position slot leaves a pixel before the minimise button. The EQ's and
+  playlist's mini strips carry their buttons a row higher, and the EQ's
+  now shows its unshade button beside close; its "EQ" sits a row lower.
+  The playlist's mini title and time sit level with its buttons: a skin
+  whose font is set a row down in `text.bmp` (as Lantern's are) has it
+  drawn a row higher, so classic skins keep Winamp's exact place.
+- The EQ's preamp snaps to 0 dB near the middle, as balance snaps to centre.
+- Lantern's skins edge the main window, the EQ and the playlist (and their
+  shaded strips) in one colour all the way round, where the bottom and
+  right edges were darker and the main window's and EQ's vignette dimmed
+  their edges below the title bar. The main window's and EQ's bottom edges
+  stay dark, shaded or not: stacked, they meet the next window's lit top,
+  and two lit lines there read as a double border.
+- Windows have no drop shadow. Docked windows sit flush, and the focused
+  one's larger shadow fell across its neighbour's top edge, half-hiding it
+  as focus moved.
 
 ### Fixed
 
+- Windows closed in their mini (windowshade) mode reopen where they were.
+  Each was rebuilt full size and then rolled up while still hidden, and a
+  hidden macOS window shrinks towards its bottom edge, so it reopened as
+  far down as its full height.
+- Skins' `region.txt` shapes now land where they are drawn: the mask was
+  applied upside down, so a region cutting a window's top row cut its
+  bottom row instead.
+- A focused window's title bar no longer reshuffles the stars behind it:
+  focused and unfocused strips (and every other sprite drawn twice) share
+  one starfield.
+- Shuffle, repeat, always on top and double size are remembered when
+  Lantern is closed with the main window in its mini (windowshade) mode.
+  They were dropped as the window shaded, so they saved as off.
 - Tracks that showed only their file name, with no artist or length, now
   read their tags. These were .m4a files written by Apple's tools (lofty
   0.25.4 lost its place in them; 0.25.5 fixes it) and MP3s with one

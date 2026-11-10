@@ -216,10 +216,22 @@ mod tests {
     fn awkward_files_read_their_tags() {
         let music = Path::new(env!("HOME")).join("Library/CloudStorage/Dropbox/Music");
         for (file, artist, genre) in [
-            ("indie rock/Alt-J Tiny Desk Concert.m4a", "Alt-J", "indie misc"),
-            ("legacy rock/Games/ff8/Final Fantasy VIII Ending Theme.mp3", "Final Fantasy VIII", "legacy"),
+            (
+                "indie rock/Alt-J Tiny Desk Concert.m4a",
+                "Alt-J",
+                "indie misc",
+            ),
+            (
+                "legacy rock/Games/ff8/Final Fantasy VIII Ending Theme.mp3",
+                "Final Fantasy VIII",
+                "legacy",
+            ),
             // Its genre comes after the cover art.
-            ("legacy rock/Jookabox/03 You Cried Me.m4a", "Jookabox", "legacy"),
+            (
+                "legacy rock/Jookabox/03 You Cried Me.m4a",
+                "Jookabox",
+                "legacy",
+            ),
         ] {
             let path = music.join(file);
             if !path.exists() {

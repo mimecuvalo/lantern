@@ -585,10 +585,11 @@ impl Canvas {
         let p = pal();
         for yy in y..y + h {
             for xx in x..x + w {
-                let row = yy.div_euclid(BH);
+                let (lx, ly) = (xx - x, yy - y);
+                let row = ly.div_euclid(BH);
                 let shift = if row % 2 == 0 { 0 } else { BW / 2 };
-                let col = (xx + shift).div_euclid(BW);
-                let (bx, by) = ((xx + shift).rem_euclid(BW), yy.rem_euclid(BH));
+                let col = (lx + shift).div_euclid(BW);
+                let (bx, by) = ((lx + shift).rem_euclid(BW), ly.rem_euclid(BH));
                 let base = if hash(col, row, seed).is_multiple_of(2) {
                     p.s2
                 } else {
@@ -636,10 +637,13 @@ impl Canvas {
             for xx in x..x + w {
                 let t = (yy - y) as f32 / h.max(1) as f32;
                 let level = t * 3.0;
-                let threshold = BAYER[yy.rem_euclid(4) as usize][xx.rem_euclid(4) as usize] / 16.0;
+                // Patterns run from the rectangle's corner, so a sprite
+                // drawn twice (focused and not) comes out the same.
+                let (lx, ly) = (xx - x, yy - y);
+                let threshold = BAYER[ly.rem_euclid(4) as usize][lx.rem_euclid(4) as usize] / 16.0;
                 let band = level.floor() as usize + usize::from(level.fract() > threshold);
                 let mut c = [p.void, p.s0, p.s1, p.s2][band.min(3)];
-                let star = hash(xx, yy, seed);
+                let star = hash(lx, ly, seed);
                 let mood = theme().mood;
                 // How thick the stars are, and how they look.
                 let (rare, faint) = match mood {
@@ -652,11 +656,11 @@ impl Canvas {
                     // Curtains: a wavering band, streaked vertically, green
                     // at the foot fading to violet at the top.
                     let centre = 34.0
-                        + 9.0 * (xx as f32 * 0.045).sin()
-                        + 4.0 * (xx as f32 * 0.11 + 1.0).sin();
-                    let d = yy as f32 - centre;
+                        + 9.0 * (lx as f32 * 0.045).sin()
+                        + 4.0 * (lx as f32 * 0.11 + 1.0).sin();
+                    let d = ly as f32 - centre;
                     if (-16.0..5.0).contains(&d) {
-                        let streak = 0.35 + 0.65 * vnoise(xx, 0, 3, seed ^ 0xA0);
+                        let streak = 0.35 + 0.65 * vnoise(lx, 0, 3, seed ^ 0xA0);
                         let fade = if d < 0.0 {
                             1.0 + d / 16.0
                         } else {
@@ -684,11 +688,12 @@ impl Canvas {
         let p = pal();
         for yy in y..y + h {
             for xx in x..x + w {
-                let major = xx.rem_euclid(32) == 0 || yy.rem_euclid(32) == 0;
-                let minor = xx.rem_euclid(8) == 0 || yy.rem_euclid(8) == 0;
+                let (lx, ly) = (xx - x, yy - y);
+                let major = lx.rem_euclid(32) == 0 || ly.rem_euclid(32) == 0;
+                let minor = lx.rem_euclid(8) == 0 || ly.rem_euclid(8) == 0;
                 let c = if major {
                     p.s2
-                } else if minor && (xx + yy).rem_euclid(2) == 0 {
+                } else if minor && (lx + ly).rem_euclid(2) == 0 {
                     p.s1
                 } else {
                     p.s0
@@ -705,17 +710,18 @@ impl Canvas {
         const BH: i32 = 7;
         for yy in y..y + h {
             for xx in x..x + w {
-                let row = yy.div_euclid(BH);
+                let (lx, ly) = (xx - x, yy - y);
+                let row = ly.div_euclid(BH);
                 let shift = if row % 2 == 0 { 0 } else { BW / 2 };
-                let col = (xx + shift).div_euclid(BW);
-                let (bx, by) = ((xx + shift).rem_euclid(BW), yy.rem_euclid(BH));
+                let col = (lx + shift).div_euclid(BW);
+                let (bx, by) = ((lx + shift).rem_euclid(BW), ly.rem_euclid(BH));
                 let shade = hash(col, row, seed) % 3;
                 let base = [pal().s1, mix(pal().s1, pal().s2, 0.5), pal().s2][shade as usize];
                 let lit = hash(col, row, seed ^ 0xA1) % 5 < 2;
                 let c = if bx == 0 || by == 0 {
                     pal().s0
                 } else if by == 1 && lit {
-                    if hash(xx, yy, seed).is_multiple_of(7) {
+                    if hash(lx, ly, seed).is_multiple_of(7) {
                         pal().rim_hi
                     } else {
                         pal().rim
@@ -725,7 +731,7 @@ impl Canvas {
                 } else if by == BH - 1 || bx == BW - 1 {
                     mix(base, pal().s0, 0.4)
                 } else {
-                    match hash(xx, yy, seed ^ 0x55) % 41 {
+                    match hash(lx, ly, seed ^ 0x55) % 41 {
                         0 => mix(base, pal().s3, 0.7),
                         1 => mix(base, pal().s0, 0.7),
                         _ => base,
@@ -883,6 +889,27 @@ impl Canvas {
 
     fn text_centred(&mut self, cx: i32, y: i32, s: &str, c: C) {
         self.text(cx - text_width(s) / 2, y, s, c);
+    }
+
+    /// Text set by each glyph's inked width, not the fixed 5px cell.
+    fn text_tight(&mut self, x: i32, y: i32, s: &str, c: C) {
+        let mut at = x;
+        for ch in s.chars() {
+            self.art(at, y, &glyph(ch), c);
+            at += glyph_width(ch) + 1;
+        }
+    }
+
+    /// Copy `w` x `h` pixels of `from`, at `(fx, fy)` there, to `(x, y)`.
+    /// A sprite that leaves part of itself unpainted takes what the
+    /// window's background has at the spot it is drawn over, so the gap
+    /// cannot show.
+    fn copy(&mut self, from: &Canvas, (fx, fy): (i32, i32), x: i32, y: i32, w: i32, h: i32) {
+        for dy in 0..h {
+            for dx in 0..w {
+                self.px(x + dx, y + dy, from.get(fx + dx, fy + dy));
+            }
+        }
     }
 
     /// A soft halo of `c` around a point, fading over `r` pixels.
@@ -1124,7 +1151,12 @@ fn title_strip(
             }
         }
     } else {
-        c.frame(x, y, w, 14, pal().s3, pal().s0);
+        // The main window's: region.txt masks off its row 0, as the mini
+        // player's, so the frame starts a row down and the two line up.
+        let top = if below == 0 { 1 } else { 0 };
+        c.frame(x, y + top, w, 14 - top, pal().s3, pal().s3);
+        // The seam under the title is the window's inside, not its edge.
+        c.fill(x + 1, y + 13, w - 2, 1, pal().s0);
     }
     let line = if active { pal().cyan1 } else { pal().s3 };
     let lw = text_width(label);
@@ -1165,11 +1197,20 @@ fn menu_button(c: &mut Canvas, x: i32, y: i32, top: &str, bottom: &str, pressed:
 
 // -- Sheets -----------------------------------------------------------------------
 
+/// Whether controls sit in carved beds and grooves. The open sky's float.
+fn beds() -> bool {
+    matches!(
+        theme().style,
+        Style::Bricks | Style::Temple | Style::Wireframe
+    )
+}
+
 fn main_bmp() -> Canvas {
     let mut c = Canvas::new(275, 116);
     c.backdrop(0, 0, 275, 116, 1);
     c.burst(0, 0, 275, 116, 0);
-    c.frame(0, 0, 275, 116, pal().s3, pal().s0);
+    c.frame(0, 0, 275, 116, pal().s3, pal().s3);
+    stack_seam(&mut c, 275, 116);
 
     // The display: clutter bar column and the screen, cut into the wall.
     c.recess(9, 21, 95, 42, pal().void);
@@ -1187,16 +1228,20 @@ fn main_bmp() -> Canvas {
     c.text(130, 43, "KBPS", pal().cyan1);
     c.recess(154, 41, 14, 10, pal().void);
     c.text(170, 43, "KHZ", pal().cyan1);
-    c.recess(211, 40, 57, 14, pal().void);
+    // Mono and stereo: the box is cut to the two words, with an equal
+    // margin each side and three rows above and below; the sprites copy it.
+    c.recess(214, 41, 54, 11, pal().void);
 
-    // Grooves the sliders and position bar run in.
-    c.recess(106, 56, 110, 15, pal().s0);
-    c.recess(218, 57, 48, 14, pal().s0);
-    c.recess(15, 71, 250, 12, pal().s0);
-    // Beds for the transport row.
-    c.recess(15, 87, 116, 20, pal().s0);
-    c.recess(135, 88, 24, 18, pal().s0);
-    c.recess(163, 88, 76, 17, pal().s0);
+    // Grooves the sliders and position bar run in, and beds for the
+    // transport row. The open sky has none: its controls float.
+    if beds() {
+        c.recess(106, 56, 110, 15, pal().s0);
+        c.recess(218, 57, 48, 14, pal().s0);
+        c.recess(15, 71, 250, 12, pal().s0);
+        c.recess(15, 87, 116, 20, pal().s0);
+        c.recess(135, 88, 24, 18, pal().s0);
+        c.recess(163, 88, 76, 17, pal().s0);
+    }
 
     style_decor(&mut c, 275, 116, true);
 
@@ -1670,6 +1715,14 @@ fn vnoise(x: i32, y: i32, cell: i32, seed: u32) -> f32 {
 }
 
 /// Darken towards the edges, for depth.
+/// The main window's and the EQ's bottom edge stays dark, between the
+/// side borders: stacked, it meets the next window's lit top edge, and a lit
+/// line on each side of the join read as a double border. Their shaded
+/// strips do the same.
+fn stack_seam(c: &mut Canvas, w: i32, h: i32) {
+    c.fill(1, h - 1, w - 2, 1, pal().s0);
+}
+
 fn vignette(c: &mut Canvas, w: i32, h: i32) {
     if matches!(
         theme().style,
@@ -1677,8 +1730,12 @@ fn vignette(c: &mut Canvas, w: i32, h: i32) {
     ) {
         return;
     }
-    for y in 0..h {
-        for x in 0..w {
+    // Inside the window's edge: the border keeps its colour, as the title
+    // bar and the playlist, which have no vignette, show it. The bottom row
+    // is a dark seam, not border (see `stack_seam`), and darkens with the
+    // rest.
+    for y in 1..h {
+        for x in 1..w - 1 {
             let dx = (x as f32 / (w - 1) as f32 - 0.5).abs() * 2.0;
             let dy = (y as f32 / (h - 1) as f32 - 0.5).abs() * 2.0;
             let d = dx.max(dy);
@@ -1692,7 +1749,11 @@ fn vignette(c: &mut Canvas, w: i32, h: i32) {
 fn titlebar_bmp() -> Canvas {
     let mut c = Canvas::new(344, 87);
     c.backdrop(0, 0, 344, 87, 11);
-    for active in [true, false] {
+    // Inactive first: the sheet's windowshade strips overlap by a row
+    // (active at y=29, inactive at y=42, both 14 tall), and that row is the
+    // active strip's bottom edge but only the inactive one's top, which
+    // region.txt masks off.
+    for active in [false, true] {
         for key in [
             SpriteKey::TitleBar { active },
             SpriteKey::EasterEggTitleBar { active },
@@ -1702,51 +1763,36 @@ fn titlebar_bmp() -> Canvas {
             });
         }
         // Windowshade: the strip carries the mini display and transport.
+        // Everything in it centres on row 7, where the 9px buttons fixed at
+        // y=3 do. region.txt masks off row 0, so the strip shows rows 1-13
+        // and its frame, on rows 1 and 13, leaves a row either side of them.
         c.put(SpriteKey::ShadeBackground { active }, |c, x, y, w, h| {
             c.backdrop(x, y, w, h, 13);
-            c.frame(x, y, w, h, pal().s3, pal().s0);
-            lantern(&mut *c, x + 20, y + 2, active);
+            c.frame(x, y + 1, w, h - 1, pal().s3, pal().s3);
+            // A dark bottom, as the full window's: see `stack_seam`.
+            c.fill(x + 1, y + h - 1, w - 2, 1, pal().s0);
+            lantern(&mut *c, x + 20, y + 3, active);
+            // The mini analyser and the mini time, in boxes of one height.
             c.recess(x + 79, y + 4, 39, 7, pal().void);
-            c.recess(x + 126, y + 3, 27, 8, pal().void);
-            // Mini transport: previous, play, pause, stop, next, eject.
+            c.recess(x + 126, y + 4, 27, 7, pal().void);
+            // Mini transport: previous, play, pause, stop, next, eject;
+            // 5x5 each, evenly spaced inside their hit zones.
             let tint = if active { pal().cyan1 } else { pal().s4 };
-            c.art(
-                x + 169,
-                y + 3,
-                &["#..#", "#.##", "####", "#.##", "#..#"],
-                tint,
-            );
-            c.art(
-                x + 178,
-                y + 3,
-                &["#...", "##..", "###.", "##..", "#..."],
-                tint,
-            );
-            c.art(
-                x + 187,
-                y + 3,
-                &["##.#", "##.#", "##.#", "##.#", "##.#"],
-                tint,
-            );
-            c.art(
-                x + 196,
-                y + 3,
-                &["####", "####", "####", "####", "####"],
-                tint,
-            );
-            c.art(
-                x + 205,
-                y + 3,
-                &["#..#", "##.#", "####", "##.#", "#..#"],
-                tint,
-            );
-            c.art(
-                x + 216,
-                y + 3,
-                &["..#..", ".###.", "#####", ".....", "#####"],
-                tint,
-            );
-            c.recess(x + 226, y + 4, 17, 7, pal().s0);
+            let icons: [(i32, [&str; 5]); 6] = [
+                (170, ["#...#", "#..##", "#.###", "#..##", "#...#"]),
+                (179, ["#....", "###..", "#####", "###..", "#...."]),
+                (188, ["##.##", "##.##", "##.##", "##.##", "##.##"]),
+                (197, ["#####", "#####", "#####", "#####", "#####"]),
+                (206, ["#...#", "##..#", "###.#", "##..#", "#...#"]),
+                (216, ["..#..", ".###.", "#####", ".....", "#####"]),
+            ];
+            for (ix, icon) in icons {
+                c.art(x + ix, y + 5, &icon, tint);
+            }
+            // The mini position slot: no frame, so a pixel of sky parts it
+            // from the minimise button.
+            c.fill(x + 226, y + 4, 17, 7, pal().s0);
+            c.fill(x + 226, y + 7, 17, 1, pal().cyan3);
         });
     }
     // The 27px column of small buttons at the left.
@@ -1781,88 +1827,156 @@ fn titlebar_bmp() -> Canvas {
         });
     }
 
-    // The clutter bar: O A I D V, lit when pressed.
+    // The clutter bar: O A I D V, lit when pressed. The letters sit 7px
+    // apart, each inside its button's hit rows; the strip copies the
+    // display's own pixels, so the display's edge runs on beneath it.
+    let main = main_bmp();
     let letters = [
-        (ClutterButton::O, 'O', 3),
+        (ClutterButton::O, 'O', 4),
         (ClutterButton::A, 'A', 11),
         (ClutterButton::I, 'I', 18),
         (ClutterButton::D, 'D', 25),
-        (ClutterButton::V, 'V', 33),
+        (ClutterButton::V, 'V', 32),
     ];
+    // The font's V is three wide; here, among the four-wide letters, it
+    // takes all four.
+    let letter = |ch| {
+        if ch == 'V' {
+            ["#..#", "#..#", "#..#", ".##.", ".##."]
+        } else {
+            glyph(ch)
+        }
+    };
     for enabled in [true, false] {
         c.put(SpriteKey::ClutterBar { enabled }, |c, x, y, w, h| {
-            c.fill(x, y, w, h, pal().void);
-            c.frame(x, y, w, h, pal().s1, pal().s1);
+            c.copy(&main, (10, 22), x, y, w, h);
             for (_, ch, dy) in letters {
                 let col = if enabled { pal().cyan2 } else { pal().s2 };
-                c.art(x + 2, y + dy + 1, &glyph(ch), col);
+                c.art(x + 2, y + dy, &letter(ch), col);
             }
         });
     }
-    for (b, ch, _) in letters {
+    let (_, bar_rect) = sprite::resolve(SpriteKey::ClutterBar { enabled: true });
+    let bar = Canvas(c.0.clone());
+    for (b, ch, dy) in letters {
         c.put(SpriteKey::ClutterBarButton(b), |c, x, y, w, h| {
-            c.fill(x, y, w, h, pal().cyan3);
-            c.art(x + 2, y + 1, &glyph(ch), pal().cyan);
+            // The button's rect is its hit rows, which are uneven; the lit
+            // plate is the letter's own, a row either side, so every lit
+            // letter looks alike.
+            let top = clutter_hit_top(b);
+            // Under the plate, the lit bar as it is, neighbours' letters and
+            // all: D's rows reach into the top of V.
+            c.copy(
+                &bar,
+                (bar_rect.x as i32, bar_rect.y as i32 + top),
+                x,
+                y,
+                w,
+                h,
+            );
+            let at = dy - top;
+            for row in (at - 1).max(0)..(at + 6).min(h) {
+                c.fill(x, y + row, w, 1, pal().cyan3);
+            }
+            // V's letter starts a row above its hit rows: clip it to the
+            // sprite, whose top row the bar's own V fills in.
+            let rows = letter(ch);
+            let skip = (-at).max(0) as usize;
+            c.art(x + 2, y + at + skip as i32, &rows[skip..], pal().cyan);
         });
     }
     c
 }
 
+/// Where each clutter-bar button's hit rows start, below the bar's top.
+fn clutter_hit_top(b: ClutterButton) -> i32 {
+    match b {
+        ClutterButton::O => 3,
+        ClutterButton::A => 11,
+        ClutterButton::I => 18,
+        ClutterButton::D => 25,
+        ClutterButton::V => 33,
+    }
+}
+
+/// Where the transport buttons and toggles are drawn in the main window,
+/// and the part of each sprite the button face fills: `(window x, window
+/// y, face x, face y, face w, face h)`, the face relative to the sprite.
+/// Faces are all 15 rows, at rows 89..=103, and 22 wide with a pixel of sky
+/// between neighbours; the sprite's other pixels copy the window behind.
+const TRANSPORT: [(i32, i32, i32, i32, i32, i32); 6] = [
+    (16, 88, 0, 1, 22, 15),
+    (39, 88, 0, 1, 22, 15),
+    (62, 88, 0, 1, 22, 15),
+    (85, 88, 0, 1, 22, 15),
+    (108, 88, 0, 1, 22, 15),
+    (136, 89, 0, 0, 22, 15),
+];
+
+/// A raised face inside a sprite drawn at window `(wx, wy)`, the rest of
+/// the sprite copied from the main window's background.
+fn face_in_sprite(
+    c: &mut Canvas,
+    main: &Canvas,
+    (x, y, w, h): (i32, i32, i32, i32),
+    (wx, wy): (i32, i32),
+    (fx, fy, fw, fh): (i32, i32, i32, i32),
+    pressed: bool,
+) {
+    c.copy(main, (wx, wy), x, y, w, h);
+    c.raised(x + fx, y + fy, fw, fh, pressed);
+}
+
 fn cbuttons_bmp() -> Canvas {
     let mut c = Canvas::new(136, 36);
-    type Icon = (fn(bool) -> SpriteKey, [&'static str; 7]);
+    let main = main_bmp();
+    type Icon = (fn(bool) -> SpriteKey, &'static [&'static str]);
+    // Six wide, to centre exactly in a 22px face; seven tall where they
+    // can be, for the 15-row face.
     let icons: [Icon; 6] = [
         (
             |p| SpriteKey::Previous { pressed: p },
-            [
-                "#...#..", "#..##..", "#.###..", "#####..", "#.###..", "#..##..", "#...#..",
+            &[
+                "#....#", "#...##", "#..###", "#.####", "#..###", "#...##", "#....#",
             ],
         ),
         (
             |p| SpriteKey::Play { pressed: p },
-            [
-                "#......", "###....", "#####..", "#######", "#####..", "###....", "#......",
+            &[
+                "#.....", "###...", "#####.", "######", "#####.", "###...", "#.....",
             ],
         ),
         (
             |p| SpriteKey::Pause { pressed: p },
-            [
-                "##..##.", "##..##.", "##..##.", "##..##.", "##..##.", "##..##.", "##..##.",
+            &[
+                "##..##", "##..##", "##..##", "##..##", "##..##", "##..##", "##..##",
             ],
         ),
         (
             |p| SpriteKey::Stop { pressed: p },
-            [
-                "######.", "######.", "######.", "######.", "######.", "######.", ".......",
-            ],
+            &["######", "######", "######", "######", "######", "######"],
         ),
         (
             |p| SpriteKey::Next { pressed: p },
-            [
-                "#...#..", "##..#..", "###.#..", "#####..", "###.#..", "##..#..", "#...#..",
+            &[
+                "#....#", "##...#", "###..#", "####.#", "###..#", "##...#", "#....#",
             ],
         ),
         (
             |p| SpriteKey::Eject { pressed: p },
-            [
-                "...#...", "..###..", ".#####.", "#######", ".......", "#######", ".......",
-            ],
+            &["..##..", ".####.", "######", "......", "######"],
         ),
     ];
-    for (key, icon) in icons {
+    for ((key, icon), (wx, wy, fx, fy, fw, fh)) in icons.into_iter().zip(TRANSPORT) {
         for pressed in [false, true] {
             c.put(key(pressed), |c, x, y, w, h| {
-                c.raised(x, y, w, h, pressed);
-                let (ix, iy) = (x + (w - 7) / 2, y + (h - 7) / 2);
+                face_in_sprite(c, &main, (x, y, w, h), (wx, wy), (fx, fy, fw, fh), pressed);
+                let (iw, ih) = (icon[0].len() as i32, icon.len() as i32);
+                let (ix, iy) = (x + fx + (fw - iw) / 2, y + fy + (fh - ih) / 2);
                 if pressed {
-                    c.glow(ix + 3, iy + 3, pal().cyan, 6, 0.3);
+                    c.glow(ix + iw / 2, iy + ih / 2, pal().cyan, 6, 0.3);
                 }
-                c.art(
-                    ix,
-                    iy,
-                    &icon,
-                    if pressed { pal().cyan } else { pal().cyan1 },
-                );
+                c.art(ix, iy, icon, if pressed { pal().cyan } else { pal().cyan1 });
             });
         }
     }
@@ -1929,17 +2043,21 @@ fn playpaus_bmp() -> Canvas {
     c
 }
 
+/// Mono and stereo, drawn at (212, 41) and (239, 41): each copies the box
+/// the main window cuts for them, and sets its word tight so the pair sits
+/// centred in it.
 fn monoster_bmp() -> Canvas {
     let mut c = Canvas::new(56, 24);
+    let main = main_bmp();
     for active in [true, false] {
         let col = if active { pal().cyan } else { pal().cyan2 };
         c.put(SpriteKey::Stereo { active }, |c, x, y, w, h| {
-            c.fill(x, y, w, h, pal().void);
-            c.text(x, y + 3, "STEREO", col);
+            c.copy(&main, (239, 41), x, y, w, h);
+            c.text_tight(x, y + 3, "STEREO", col);
         });
         c.put(SpriteKey::Mono { active }, |c, x, y, w, h| {
-            c.fill(x, y, w, h, pal().void);
-            c.text_centred(x + w / 2, y + 3, "MONO", col);
+            c.copy(&main, (212, 41), x, y, w, h);
+            c.text_tight(x + 3, y + 3, "MONO", col);
         });
     }
     c
@@ -1962,7 +2080,8 @@ fn posbar_bmp() -> Canvas {
             c.fill(x + 2, y + 2, w - 4, h - 4, mix(core, pal().s0, 0.5));
             c.fill(x + 1, y + 3, w - 2, h - 6, mix(core, pal().s0, 0.5));
             c.fill(x + 4, y + 4, w - 8, 2, core);
-            c.fill(x + w / 2 - 2, y + 4, 4, 2, pal().white);
+            // Odd, like the 29px thumb, so it sits dead centre.
+            c.fill(x + w / 2 - 1, y + 4, 3, 2, pal().white);
         });
     }
     c
@@ -2012,55 +2131,42 @@ fn slider_bmp(width: u32, track_x: i32, track_w: i32, balance: bool) -> Canvas {
     c
 }
 
+/// Shuffle and repeat, then the EQ and playlist toggles. Like the
+/// transport, each face leaves a pixel of sky to its neighbour: shuffle's
+/// last column is under repeat's sprite, so repeat's first is sky; PL's
+/// last column is sky, so EQ and PL are both 22 wide.
 fn shufrep_bmp() -> Canvas {
     let mut c = Canvas::new(92, 85);
+    let main = main_bmp();
+    const REPEAT_ICON: [&str; 7] = [
+        "..#....", ".######", "..#...#", "#.....#", "#...#..", "######.", "....#..",
+    ];
     for active in [false, true] {
         for pressed in [false, true] {
             let lamp = if active { pal().cyan } else { pal().s3 };
+            let ink = if active { pal().cyan } else { pal().cyan1 };
             c.put(SpriteKey::Shuffle { active, pressed }, |c, x, y, w, h| {
-                c.raised(x, y, w, h, pressed);
+                face_in_sprite(c, &main, (x, y, w, h), (164, 89), (0, 0, 46, 15), pressed);
                 c.fill(x + 3, y + 6, 2, 3, lamp);
-                c.text(
-                    x + 8,
-                    y + 5,
-                    "SHUFFLE",
-                    if active { pal().cyan } else { pal().cyan1 },
-                );
+                c.text(x + 8, y + 5, "SHUFFLE", ink);
             });
             c.put(SpriteKey::Repeat { active, pressed }, |c, x, y, w, h| {
-                c.raised(x, y, w, h, pressed);
-                c.fill(x + 3, y + 6, 2, 3, lamp);
-                c.art(
-                    x + 10,
-                    y + 3,
-                    &[
-                        "..#....", ".######", "..#...#", "#...#..", "######.", "....#..",
-                    ],
-                    if active { pal().cyan } else { pal().cyan1 },
-                );
+                face_in_sprite(c, &main, (x, y, w, h), (210, 89), (1, 0, 27, 15), pressed);
+                c.fill(x + 4, y + 6, 2, 3, lamp);
+                c.art(x + 11, y + 4, &REPEAT_ICON, ink);
             });
+            // Lamp and label centred together in the 22px face.
+            let toggle = |c: &mut Canvas, (x, y, w, h), wx, label| {
+                face_in_sprite(c, &main, (x, y, w, h), (wx, 58), (0, 0, 22, 12), pressed);
+                c.fill(x + 4, y + 5, 2, 2, lamp);
+                c.text(x + 9, y + 4, label, ink);
+            };
             c.put(SpriteKey::EqToggle { active, pressed }, |c, x, y, w, h| {
-                c.raised(x, y, w, h, pressed);
-                c.fill(x + 3, y + 5, 2, 2, lamp);
-                c.text(
-                    x + 8,
-                    y + 4,
-                    "EQ",
-                    if active { pal().cyan } else { pal().cyan1 },
-                );
+                toggle(c, (x, y, w, h), 219, "EQ")
             });
             c.put(
                 SpriteKey::PlaylistToggle { active, pressed },
-                |c, x, y, w, h| {
-                    c.raised(x, y, w, h, pressed);
-                    c.fill(x + 3, y + 5, 2, 2, lamp);
-                    c.text(
-                        x + 8,
-                        y + 4,
-                        "PL",
-                        if active { pal().cyan } else { pal().cyan1 },
-                    );
-                },
+                |c, x, y, w, h| toggle(c, (x, y, w, h), 242, "PL"),
             );
         }
     }
@@ -2077,19 +2183,24 @@ fn eqmain_bmp() -> Canvas {
     c.put(SpriteKey::EqBackground, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 32);
         c.burst(x, y, w, h, 116);
-        c.frame(x, y, w, h, pal().s3, pal().s0);
+        c.frame(x, y, w, h, pal().s3, pal().s3);
+        stack_seam(&mut *c, w, h);
         style_decor(&mut *c, w, h, false);
         c.recess(86, 17, 113, 19, pal().void);
-        // Slider beds and their labels.
-        // Dark plaques, so the labels read against the rim-lit stone.
-        c.recess(40, 37, 34, 65, pal().s0);
-        c.recess(13, 104, 253, 7, pal().s0);
-        c.recess(20, 37, 16, 65, pal().s0);
-        c.text_centred(28, 105, "PREAMP", pal().cyan1);
+        // Slider beds and their labels, on dark plaques so the labels read
+        // against the rim-lit stone. The open sky has neither.
+        if beds() {
+            c.recess(40, 37, 34, 65, pal().s0);
+            c.recess(13, 104, 253, 7, pal().s0);
+            c.recess(20, 37, 16, 65, pal().s0);
+            for i in 0..10 {
+                c.recess(77 + 18 * i, 37, 16, 65, pal().s0);
+            }
+        }
+        // Each label centred on its slider's track, at x + 6.
+        c.text_centred(27, 105, "PREAMP", pal().cyan1);
         for (i, label) in BANDS.iter().enumerate() {
-            let bx = 78 + 18 * i as i32;
-            c.recess(bx - 1, 37, 16, 65, pal().s0);
-            c.text_centred(bx + 7, 105, label, pal().cyan1);
+            c.text_centred(84 + 18 * i as i32, 105, label, pal().cyan1);
         }
         c.text(43, 39, "+12", pal().cyan1);
         c.text(48, 67, "0", pal().cyan1);
@@ -2126,33 +2237,28 @@ fn eqmain_bmp() -> Canvas {
     c.put(SpriteKey::EqMaximizeButtonFallback, |c, x, y, _, _| {
         small_button(c, x, y, &ICON_UNSHADE, false)
     });
+    // On is a pixel narrower than its sprite, so a column of the window
+    // behind parts it from Auto; lamp and label centre in each face.
+    let bg = Canvas(c.0.clone());
     for active in [false, true] {
         for pressed in [false, true] {
             let lamp = if active { pal().cyan } else { pal().s3 };
+            let ink = if active { pal().cyan } else { pal().cyan1 };
             c.put(
                 SpriteKey::EqOnButton { active, pressed },
                 |c, x, y, w, h| {
-                    c.raised(x, y, w, h, pressed);
-                    c.fill(x + 3, y + 5, 2, 2, lamp);
-                    c.text(
-                        x + 9,
-                        y + 4,
-                        "ON",
-                        if active { pal().cyan } else { pal().cyan1 },
-                    );
+                    c.copy(&bg, (14, 18), x, y, w, h);
+                    c.raised(x, y, w - 1, h, pressed);
+                    c.fill(x + 5, y + 5, 2, 2, lamp);
+                    c.text(x + 11, y + 4, "ON", ink);
                 },
             );
             c.put(
                 SpriteKey::EqAutoButton { active, pressed },
                 |c, x, y, w, h| {
                     c.raised(x, y, w, h, pressed);
-                    c.fill(x + 3, y + 5, 2, 2, lamp);
-                    c.text(
-                        x + 8,
-                        y + 4,
-                        "AUTO",
-                        if active { pal().cyan } else { pal().cyan1 },
-                    );
+                    c.fill(x + 4, y + 5, 2, 2, lamp);
+                    c.text(x + 9, y + 4, "AUTO", ink);
                 },
             );
         }
@@ -2184,9 +2290,12 @@ fn eqmain_bmp() -> Canvas {
             c.fill(x, y, w, h, pal().s0);
             let t = f32::from(p) / 27.0;
             let col = mix(pal().pink1, pal().cyan, t);
-            c.frame(x + 5, y, 4, h, pal().s0, pal().s2);
-            c.fill(x + 6, y + 1, 2, h - 2, mix(col, pal().s0, 0.35));
-            c.fill(x + 6, y + h / 2, 2, 1, pal().white);
+            // Three wide, centred on x + 6 as the 11px thumb at x + 1 is.
+            c.frame(x + 4, y, 5, h, pal().s0, pal().s2);
+            // The shadow starts where the light does, a row down.
+            c.px(x + 8, y, pal().s0);
+            c.fill(x + 5, y + 1, 3, h - 2, mix(col, pal().s0, 0.35));
+            c.fill(x + 5, y + h / 2, 3, 1, pal().white);
         });
     }
     c.put(SpriteKey::EqGraphBackground, |c, x, y, w, h| {
@@ -2219,15 +2328,34 @@ fn eqmain_bmp() -> Canvas {
     c
 }
 
+/// A 9x9 title button sprite for window position `(wx, wy)` whose button
+/// is drawn a row higher, at `wy - 1`: its top row falls outside the
+/// sprite, onto the background (which paints the same button there), and
+/// its last row is the background `bg` behind it.
+fn button_a_row_up(
+    c: &mut Canvas,
+    bg: &Canvas,
+    (x, y): (i32, i32),
+    (wx, wy): (i32, i32),
+    icon: &[&str],
+    pressed: bool,
+) {
+    let mut tmp = Canvas::new(9, 10);
+    tmp.copy(bg, (wx, wy - 1), 0, 0, 9, 10);
+    small_button(&mut tmp, 0, 0, icon, pressed);
+    c.copy(&tmp, (0, 1), x, y, 9, 9);
+}
+
 fn eq_ex_bmp() -> Canvas {
     let mut c = Canvas::new(275, 56);
     for active in [true, false] {
         c.put(SpriteKey::EqShadeBackground { active }, |c, x, y, w, h| {
             c.backdrop(x, y, w, h, 41);
-            c.frame(x, y, w, h, pal().s3, pal().s0);
+            c.frame(x, y, w, h, pal().s3, pal().s3);
+            c.fill(x + 1, y + h - 1, w - 2, 1, pal().s0);
             c.text(
                 x + 8,
-                y + 4,
+                y + 5,
                 "EQ",
                 if active { pal().cyan1 } else { pal().s4 },
             );
@@ -2239,6 +2367,11 @@ fn eq_ex_bmp() -> Canvas {
             for xx in x + 165..x + 206 {
                 c.px(xx, y + 6, pal().cyan3);
             }
+            // Unshade and close, painted in a row above their fixed y=3,
+            // as the playlist's mini buttons are; close's own sprites
+            // carry the shift (see `button_a_row_up`).
+            small_button(&mut *c, x + 254, y + 2, &ICON_UNSHADE, false);
+            small_button(&mut *c, x + 264, y + 2, &ICON_CLOSE, false);
         });
     }
     for t in [ShadeThumb::Left, ShadeThumb::Center, ShadeThumb::Right] {
@@ -2258,10 +2391,16 @@ fn eq_ex_bmp() -> Canvas {
     c.put(SpriteKey::EqMinimizeButton, |c, x, y, _, _| {
         small_button(c, x, y, &ICON_SHADE, true)
     });
+    // The focused strip is the background behind close; only the "EQ"
+    // label differs between the two, far from it.
+    let (_, strip) = sprite::resolve(SpriteKey::EqShadeBackground { active: true });
+    let bg = Canvas(c.0.clone());
+    let mut window = Canvas::new(275, 14);
+    window.copy(&bg, (strip.x as i32, strip.y as i32), 0, 0, 275, 14);
     for pressed in [false, true] {
         c.put(
             SpriteKey::EqShadeCloseButton { pressed },
-            |c, x, y, _, _| small_button(c, x, y, &ICON_CLOSE, pressed),
+            |c, x, y, _, _| button_a_row_up(c, &window, (x, y), (264, 3), &ICON_CLOSE, pressed),
         );
     }
     c
@@ -2309,7 +2448,7 @@ fn pledit_bmp() -> Canvas {
             |c, x, y, w, h| {
                 c.backdrop(x, y, w, h, 55);
                 c.frame(x, y, w, 1, pal().s3, pal().s3);
-                c.fill(x + w - 1, y, 1, h, pal().s0);
+                c.fill(x + w - 1, y, 1, h, pal().s3);
                 for xx in x..x + 3 {
                     c.px(xx, y + 9, line);
                 }
@@ -2326,20 +2465,20 @@ fn pledit_bmp() -> Canvas {
     c.put(SpriteKey::PlaylistRightTile, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 57);
         c.fill(x, y, 1, h, pal().s3);
-        c.fill(x + w - 1, y, 1, h, pal().s0);
+        c.fill(x + w - 1, y, 1, h, pal().s3);
         // The scrollbar's groove.
         c.fill(x + 5, y, 8, h, pal().s0);
         c.fill(x + 8, y, 2, h, pal().cyan3);
     });
     c.put(SpriteKey::PlaylistBottomTile, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 58);
-        c.fill(x, y + h - 1, w, 1, pal().s0);
+        c.fill(x, y + h - 1, w, 1, pal().s3);
         c.moss(x, y + h - 2, w, true, 59);
     });
     c.put(SpriteKey::PlaylistBottomLeftCorner, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 60);
         c.fill(x, y, 1, h, pal().s3);
-        c.fill(x, y + h - 1, w, 1, pal().s0);
+        c.fill(x, y + h - 1, w, 1, pal().s3);
         c.moss(x + 1, y + h - 2, w - 1, true, 61);
         let labels = [("ADD", ""), ("REM", ""), ("SEL", ""), ("MISC", "")];
         for (i, (top, bottom)) in labels.iter().enumerate() {
@@ -2348,8 +2487,8 @@ fn pledit_bmp() -> Canvas {
     });
     c.put(SpriteKey::PlaylistBottomRightCorner, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 62);
-        c.fill(x + w - 1, y, 1, h, pal().s0);
-        c.fill(x, y + h - 1, w, 1, pal().s0);
+        c.fill(x + w - 1, y, 1, h, pal().s3);
+        c.fill(x, y + h - 1, w, 1, pal().s3);
         c.moss(x, y + h - 2, w - 22, true, 63);
         // Running time, then mini transport and mini time.
         c.recess(x + 6, y + 9, 60, 8, pal().void);
@@ -2377,7 +2516,7 @@ fn pledit_bmp() -> Canvas {
     });
     c.put(SpriteKey::PlaylistVisualizerBackground, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 64);
-        c.fill(x, y + h - 1, w, 1, pal().s0);
+        c.fill(x, y + h - 1, w, 1, pal().s3);
         c.recess(x + 3, y + 8, w - 6, 21, pal().void);
         // Something in the dark: a ghost koi, or the theme's own scene.
         if theme().style == Style::Chroma {
@@ -2391,11 +2530,11 @@ fn pledit_bmp() -> Canvas {
     c.put(SpriteKey::PlaylistShadeBackground, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 66);
         c.fill(x, y, w, 1, pal().s3);
-        c.fill(x, y + h - 1, w, 1, pal().s0);
+        c.fill(x, y + h - 1, w, 1, pal().s3);
     });
     c.put(SpriteKey::PlaylistShadeBackgroundLeft, |c, x, y, w, h| {
         c.backdrop(x, y, w, h, 67);
-        c.frame(x, y, w, h, pal().s3, pal().s0);
+        c.frame(x, y, w, h, pal().s3, pal().s3);
         c.fill(x + w - 1, y, 1, h, pal().s2);
         lantern(&mut *c, x + 6, y + 2, false);
     });
@@ -2404,7 +2543,7 @@ fn pledit_bmp() -> Canvas {
             SpriteKey::PlaylistShadeBackgroundRight { active },
             |c, x, y, w, h| {
                 c.backdrop(x, y, w, h, 68);
-                c.frame(x, y, w, h, pal().s3, pal().s0);
+                c.frame(x, y, w, h, pal().s3, pal().s3);
                 c.fill(x, y, 1, h, pal().s2);
                 // Resize grip, shade (expand) and close.
                 c.art(
@@ -2413,8 +2552,11 @@ fn pledit_bmp() -> Canvas {
                     &["..#", ".##", "###"],
                     if active { pal().cyan1 } else { pal().s4 },
                 );
-                small_button(c, x + 29, y + 3, &ICON_UNSHADE, false);
-                small_button(c, x + 39, y + 3, &ICON_CLOSE, false);
+                // A row above the buttons' fixed y=3, centred with the
+                // strip's text; the pressed sprites, shared with the full
+                // playlist, still land at y=3.
+                small_button(c, x + 29, y + 2, &ICON_UNSHADE, false);
+                small_button(c, x + 39, y + 2, &ICON_CLOSE, false);
             },
         );
     }
@@ -2488,7 +2630,10 @@ fn text_bmp() -> Canvas {
     let mut c = Canvas::new(155, 18);
     for ch in lantern_skin::font::CHARSET.chars() {
         let (_, r) = sprite::resolve(SpriteKey::Char(ch));
-        c.art(r.x as i32, r.y as i32, &glyph(ch), pal().cyan);
+        // A row down in the 6-row cell: the strips the text sits in (the
+        // shaded windows, the mini time box) centre on the cell's lower
+        // five rows.
+        c.art(r.x as i32, r.y as i32 + 1, &glyph(ch), pal().cyan);
     }
     c
 }
@@ -3032,6 +3177,16 @@ fn viscolor() -> String {
         .collect()
 }
 
+/// `region.txt`: the mini player loses its top row, so it shows 13 rows
+/// centred on its buttons; the main window loses its own, so its top edge
+/// stays put as it rolls up and down. Corner coordinates, as Winamp reads
+/// them.
+fn region() -> String {
+    "[Normal]\nNumPoints=4\nPointList=0,1, 275,1, 275,116, 0,116\n\
+     [WindowShade]\nNumPoints=4\nPointList=0,1, 275,1, 275,14, 0,14\n"
+        .to_string()
+}
+
 fn pledit() -> String {
     let hex = |[r, g, b]: C| format!("#{r:02X}{g:02X}{b:02X}");
     let p = pal();
@@ -3125,6 +3280,7 @@ fn write_skin(out: &std::path::Path) -> anyhow::Result<()> {
     for (name, text) in [
         ("viscolor.txt", viscolor()),
         ("pledit.txt", pledit()),
+        ("region.txt", region()),
         (
             "readme.txt",
             format!(
